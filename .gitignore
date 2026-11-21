@@ -1,0 +1,9 @@
+# Test binaries and coverage
+*.test
+*.out
+coverage.*
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
