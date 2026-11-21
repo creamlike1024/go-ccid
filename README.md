@@ -11,16 +11,35 @@ an app gets the reader's file descriptor from `UsbManager` and hands it over.
 
 ## Scope
 
-- `ccid`: the protocol, independent of how bytes reach the reader. CCID
-  messages, time extensions, T=0 at TPDU level (GET RESPONSE and Le
-  correction), T=1 framing and chaining, short and extended APDUs, and the
-  reader's class descriptor (exchange level, maximum message length).
-- `ccid/usbfs`: the transport for Linux and Android, through usbdevfs on an
-  open file descriptor, in pure Go.
-- `ccid/ccidtest`: a simulated reader and card, for tests of this package
-  and of the programs that use it.
+- `github.com/creamlike1024/go-ccid` (package `ccid`): the protocol,
+  independent of how bytes reach the reader. CCID messages, time
+  extensions, stale responses, the ATR, protocol and parameter selection,
+  short and extended APDUs with chaining, T=0 at TPDU level (with optional
+  GET RESPONSE and Le correction), and the reader's descriptors (exchange
+  level, maximum message length, endpoints).
+- `go-ccid/ccidtest`: a simulated reader and card, for tests of this
+  package and of the programs that use it.
+- Planned: T=1 at TPDU level, and `go-ccid/usbfs`, the transport for Linux
+  and Android through usbdevfs on an open file descriptor, in pure Go.
+  Other transports (macOS, Windows) may follow.
 
-Other transports (macOS, Windows) may follow.
+## Example
+
+```go
+r, err := ccid.Open(transport, iface.Descriptor, nil)
+if err != nil {
+	return err
+}
+defer r.Close()
+card, err := r.Connect(ctx, 0, nil) // power on, ATR, protocol, parameters
+if err != nil {
+	return err
+}
+defer card.Disconnect(ctx)
+resp, err := card.Transmit(ctx, []byte{0x00, 0xA4, 0x04, 0x00, 0x00})
+```
+
+`iface` comes from `ccid.FindInterfaces` on the device's raw descriptors.
 
 ## License
 
