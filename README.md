@@ -75,6 +75,26 @@ resp, err := card.Transmit(ctx, []byte{0x00, 0xA4, 0x04, 0x00, 0x00})
 Another transport gets its interface from `ccid.FindInterfaces` on the
 device's raw descriptors.
 
+## ccid-probe
+
+`cmd/ccid-probe` (Linux) lists the readers, connects to the card and sends
+APDUs given in hex, with `-trace` printing every CCID message:
+
+```sh
+go run github.com/creamlike1024/go-ccid/cmd/ccid-probe -trace 00A4040000
+```
+
+For example, reading an eUICC's EID, which changes nothing on the card:
+open a logical channel, select the ISD-R on it, send GetEuiccData for
+tag 5A, close the channel (here the card gave channel 1):
+
+```sh
+ccid-probe -getresponse 0070000001 \
+  01A4040010A0000005591010FFFFFFFF890000010000 \
+  81E2910006BF3E035C015A00 \
+  0070800100
+```
+
 ## License
 
 [MIT](LICENSE)
