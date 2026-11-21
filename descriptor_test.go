@@ -44,10 +44,15 @@ func TestDescriptorRoundTrip(t *testing.T) {
 // configuration, and the interface given.
 func rawDescriptors(t *testing.T, class byte, cdAfterEndpoints bool) []byte {
 	t.Helper()
+	return rawDescriptorsProtocol(t, class, 0, cdAfterEndpoints)
+}
+
+func rawDescriptorsProtocol(t *testing.T, class, protocol byte, cdAfterEndpoints bool) []byte {
+	t.Helper()
 	cd, _ := ccidtest.NewReader(nil, ccidtest.Options{}).Descriptor().MarshalBinary()
 	device := []byte{18, 0x01, 0x00, 0x02, 0, 0, 0, 64, 0x2F, 0x07, 0xCC, 0x90, 0x00, 0x01, 1, 2, 0, 1}
 	config := []byte{9, 0x02, 0, 0, 1, 1, 0, 0x80, 50}
-	iface := []byte{9, 0x04, 0, 0, 3, class, 0, 0, 0}
+	iface := []byte{9, 0x04, 0, 0, 3, class, 0, protocol, 0}
 	bulkOut := []byte{7, 0x05, 0x02, 0x02, 64, 0, 0}
 	bulkIn := []byte{7, 0x05, 0x82, 0x02, 64, 0, 0}
 	intr := []byte{7, 0x05, 0x83, 0x03, 8, 0, 16}
@@ -94,6 +99,18 @@ func TestFindInterfaces(t *testing.T) {
 	}
 	if _, err := ccid.FindInterfaces(rawDescriptors(t, 0x08, false)); !errors.Is(err, ccid.ErrNoInterface) {
 		t.Errorf("mass storage interface: %v", err)
+	}
+	for _, p := range []byte{ccid.ProtocolICCDA, ccid.ProtocolICCDB} {
+		_, err := ccid.FindInterfaces(rawDescriptorsProtocol(t, ccid.InterfaceClass, p, false))
+		if !errors.Is(err, ccid.ErrNotSupported) {
+			t.Errorf("ICCD protocol %d: %v, want ErrNotSupported", p, err)
+		}
+	}
+	if _, err := ccid.FindInterfaces(rawDescriptorsProtocol(t, ccid.InterfaceClass, 3, false)); !errors.Is(err, ccid.ErrNoInterface) {
+		t.Errorf("reserved protocol 3: %v, want ErrNoInterface", err)
+	}
+	if ifs, err := ccid.FindInterfaces(rawDescriptorsProtocol(t, 0xFF, 5, false)); err != nil || ifs[0].Protocol != 5 {
+		t.Errorf("vendor class with its own protocol: %v %v", ifs, err)
 	}
 	if _, err := ccid.FindInterfaces([]byte{9, 0x02, 0}); err == nil {
 		t.Error("truncated descriptors accepted")

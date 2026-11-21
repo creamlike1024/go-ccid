@@ -174,6 +174,9 @@ type Interface struct {
 	Number     byte
 	AltSetting byte
 	Class      byte // InterfaceClass, or 0xFF for vendor readers with a CCID descriptor
+	// Protocol is bInterfaceProtocol: 0 for CCID's bulk transfers (with
+	// class 0x0B; vendor-defined with 0xFF).
+	Protocol byte
 	// Endpoint addresses (with the direction bit); InterruptIn is 0 when
 	// the reader has no interrupt endpoint.
 	BulkIn, BulkOut, InterruptIn byte
@@ -187,18 +190,29 @@ type Interface struct {
 // endpoints, as Linux's usbfs and Android's
 // UsbDeviceConnection.getRawDescriptors give them (a device descriptor
 // before it is skipped). An interface counts as CCID when its class is
-// 0x0B, or 0xFF with a CCID class descriptor, which some vendor readers
-// have; the class descriptor may follow the endpoints, as some readers
-// put it there.
+// 0x0B with protocol 0 (bulk transfers), or 0xFF with a CCID class
+// descriptor, which some vendor readers have; the class descriptor may
+// follow the endpoints, as some readers put it there.
+//
+// Class 0x0B with protocol 1 or 2 is a USB-ICC of the ICCD
+// specification, versions A and B, which talk over control transfers
+// rather than CCID's bulk endpoints. They are left out; a device with
+// only those gets an error that is ErrNotSupported (ICCD devices of
+// protocol 0 use bulk transfers and CCID messages, and count as CCID).
 func FindInterfaces(raw []byte) ([]Interface, error) {
 	var (
 		found  []Interface
 		cur    *Interface
 		haveCD bool
+		iccd   bool
 	)
 	finish := func() {
-		if cur != nil && haveCD && cur.BulkIn != 0 && cur.BulkOut != 0 &&
-			(cur.Class == InterfaceClass || cur.Class == 0xFF) {
+		switch {
+		case cur == nil:
+		case cur.Class == InterfaceClass && (cur.Protocol == ProtocolICCDA || cur.Protocol == ProtocolICCDB):
+			iccd = true
+		case haveCD && cur.BulkIn != 0 && cur.BulkOut != 0 &&
+			(cur.Class == InterfaceClass && cur.Protocol == ProtocolBulk || cur.Class == 0xFF):
 			found = append(found, *cur)
 		}
 		cur, haveCD = nil, false
@@ -215,7 +229,7 @@ func FindInterfaces(raw []byte) ([]Interface, error) {
 			if n < 9 {
 				return nil, fmt.Errorf("ccid: short interface descriptor at offset %d", i)
 			}
-			cur = &Interface{Number: d[2], AltSetting: d[3], Class: d[5]}
+			cur = &Interface{Number: d[2], AltSetting: d[3], Class: d[5], Protocol: d[7]}
 		case 0x05: // endpoint
 			if cur == nil || n < 7 {
 				break
@@ -243,11 +257,21 @@ func FindInterfaces(raw []byte) ([]Interface, error) {
 		i += n
 	}
 	finish()
-	if len(found) == 0 {
-		return nil, ErrNoInterface
+	switch {
+	case len(found) > 0:
+		return found, nil
+	case iccd:
+		return nil, fmt.Errorf("%w: ICCD device of control transfers (version A or B)", ErrNotSupported)
 	}
-	return found, nil
+	return nil, ErrNoInterface
 }
+
+// bInterfaceProtocol values of class 0x0B.
+const (
+	ProtocolBulk  = 0x00 // CCID, and ICCD over bulk transfers
+	ProtocolICCDA = 0x01 // ICCD version A: control transfers
+	ProtocolICCDB = 0x02 // ICCD version B: control transfers, optional interrupt-IN
+)
 
 // ErrNoInterface is returned by FindInterfaces for a device with no CCID
 // interface.

@@ -7,3 +7,6 @@ coverage.*
 .idea/
 .vscode/
 .DS_Store
+
+# Local reference material (specifications), not distributed
+/docs/
