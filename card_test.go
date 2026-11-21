@@ -100,24 +100,74 @@ func TestConnectSetsT0Parameters(t *testing.T) {
 }
 
 func TestConnectRate(t *testing.T) {
-	// Without PPS by the reader, a negotiable card stays at the default
-	// rate.
+	fidi := func(sim *ccidtest.Reader) byte { _, p := sim.Parameters(); return p[0] }
+	// A TPDU level reader without PPS of its own: the host's PPS proposes
+	// the card's TA1, Fi 512 Di 32, 250 kbit/s at 4 MHz.
 	r, sim := open(t, &testCard{atr: ccidtest.ATRT0T1}, ccidtest.Options{})
 	connect(t, r, nil)
-	if _, params := sim.Parameters(); params[0] != 0x11 {
-		t.Errorf("without PPS: bmFindexDindex %#x, want 0x11", params[0])
+	if got := sim.PPS(); !bytes.Equal(got, []byte{0xFF, 0x10, 0x96, 0x79}) {
+		t.Errorf("PPS request % x", got)
 	}
-	// A reader that negotiates PPS gets the card's TA1.
+	if fidi(sim) != 0x96 {
+		t.Errorf("after the PPS: bmFindexDindex %#x, want 0x96", fidi(sim))
+	}
+	// A slower reader: the same Fi with a smaller Di, 16 for 125 kbit/s.
+	r, sim = open(t, &testCard{atr: ccidtest.ATRT0T1}, ccidtest.Options{MaxDataRate: 200000})
+	connect(t, r, nil)
+	if fidi(sim) != 0x95 {
+		t.Errorf("reader of 200 kbit/s: bmFindexDindex %#x, want 0x95", fidi(sim))
+	}
+	// NoPPS, or a card at the default rate: no PPS.
+	r, sim = open(t, &testCard{atr: ccidtest.ATRT0T1}, ccidtest.Options{})
+	connect(t, r, &ccid.ConnectOptions{NoPPS: true})
+	if sim.PPS() != nil || fidi(sim) != 0x11 {
+		t.Errorf("NoPPS: PPS % x, bmFindexDindex %#x", sim.PPS(), fidi(sim))
+	}
+	r, sim = open(t, &testCard{atr: ccidtest.ATRT0}, ccidtest.Options{})
+	connect(t, r, nil)
+	if sim.PPS() != nil {
+		t.Errorf("PPS % x for a card at the default rate", sim.PPS())
+	}
+	// A card that answers without PPS1 stays at the default rate.
+	r, sim = open(t, &testCard{atr: ccidtest.ATRT0T1}, ccidtest.Options{PPSDefault: true})
+	connect(t, r, nil)
+	if fidi(sim) != 0x11 || sim.PowerOns() != 1 {
+		t.Errorf("PPS answered with the default: bmFindexDindex %#x, %d power ons", fidi(sim), sim.PowerOns())
+	}
+	// A reader that negotiates PPS itself gets the card's TA1, and the
+	// default when it turns that down.
 	r, sim = open(t, &testCard{atr: ccidtest.ATRT0T1}, ccidtest.Options{Features: ccid.FeatureAutoPPSProposal})
 	connect(t, r, nil)
-	if _, params := sim.Parameters(); params[0] != 0x96 {
-		t.Errorf("with PPS: bmFindexDindex %#x, want 0x96", params[0])
+	if sim.PPS() != nil || fidi(sim) != 0x96 {
+		t.Errorf("reader's PPS: PPS % x, bmFindexDindex %#x", sim.PPS(), fidi(sim))
 	}
-	// A reader that turns the rate down is asked for the default.
 	r, sim = open(t, &testCard{atr: ccidtest.ATRT0T1}, ccidtest.Options{Features: ccid.FeatureAutoPPSProposal, RejectFiDi: true})
 	connect(t, r, nil)
-	if _, params := sim.Parameters(); params[0] != 0x11 {
-		t.Errorf("rate refused: bmFindexDindex %#x, want 0x11", params[0])
+	if fidi(sim) != 0x11 {
+		t.Errorf("rate refused: bmFindexDindex %#x, want 0x11", fidi(sim))
+	}
+}
+
+func TestConnectPPSFailure(t *testing.T) {
+	for name, o := range map[string]ccidtest.Options{
+		"card silent after the PPS":      {RejectPPS: true},
+		"reader refuses the agreed rate": {RejectFiDi: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			card := &testCard{atr: ccidtest.ATRT0T1, n: 4}
+			r, sim := open(t, card, o)
+			c := connect(t, r, nil)
+			// Reset to the default rate, and working.
+			if sim.PowerOns() != 2 {
+				t.Errorf("%d power ons, want 2", sim.PowerOns())
+			}
+			if _, p := sim.Parameters(); p[0] != 0x11 {
+				t.Errorf("bmFindexDindex %#x, want 0x11", p[0])
+			}
+			if resp := transmit(t, c, 0x00, 0xCA, 0x00, 0x00, 0x04); !bytes.Equal(resp, append(pattern(4), sw9000...)) {
+				t.Errorf("after the reset: % x", resp)
+			}
+		})
 	}
 }
 

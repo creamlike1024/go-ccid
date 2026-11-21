@@ -13,7 +13,8 @@ an app gets the reader's file descriptor from `UsbManager` and hands it over.
 
 - `github.com/creamlike1024/go-ccid` (package `ccid`): the protocol,
   independent of how bytes reach the reader. CCID messages, time
-  extensions, stale responses, the ATR, protocol and parameter selection,
+  extensions, stale responses, the ATR, protocol and parameter selection
+  (with the PPS that TPDU level readers leave to the host),
   short and extended APDUs with chaining, T=0 at TPDU level (with optional
   GET RESPONSE and Le correction), T=1 at TPDU level (chaining, IFS, WTX,
   error recovery and resynchronization; LRC only), and the reader's

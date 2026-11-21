@@ -24,6 +24,11 @@ type ConnectOptions struct {
 	// layer of ISO/IEC 7816-3 does. Off, the status words come back as the
 	// card sends them, as with PC/SC.
 	AutoGetResponse bool
+	// NoPPS keeps a card at the default rate with a TPDU level reader
+	// that does not negotiate the rate itself. Without it, Connect
+	// proposes the fastest rate that the card's ATR and the reader allow
+	// in a PPS, and resets the card to the default if the PPS fails.
+	NoPPS bool
 }
 
 // Card is a card connected in a reader's slot.
@@ -80,7 +85,7 @@ func (r *Reader) Connect(ctx context.Context, slot byte, o *ConnectOptions) (*Ca
 		return fail(fmt.Errorf("%w: T=1 with CRC at TPDU level", ErrNotSupported))
 	}
 	if level == LevelTPDU || r.desc.Features&FeatureAutoParameters == 0 {
-		if err := r.setParameters(ctx, slot, c.atr, c.proto); err != nil {
+		if err := r.negotiate(ctx, c, o); err != nil {
 			return fail(err)
 		}
 	} else if p, err := r.getProtocol(ctx, slot); err == nil {
@@ -165,14 +170,55 @@ func (r *Reader) chooseProtocol(atr ATR, prefer []Protocol) (Protocol, error) {
 // which bError names when the reader takes not the card's rate.
 const fiDiOffset = HeaderLength
 
-func (r *Reader) setParameters(ctx context.Context, slot byte, atr ATR, p Protocol) error {
-	fidi := atr.FiDi()
-	_, specific := atr.SpecificMode()
-	if !specific && r.desc.Features&(FeatureAutoPPSProposal|FeatureAutoPPSCurrent) == 0 {
+// negotiate chooses the card's rate, with a PPS when the host is to make
+// it, and sets the reader's parameters.
+func (r *Reader) negotiate(ctx context.Context, c *Card, o *ConnectOptions) error {
+	_, specific := c.atr.SpecificMode()
+	autoPPS := r.desc.Features&(FeatureAutoPPSProposal|FeatureAutoPPSCurrent) != 0
+	switch {
+	case specific:
+		// The card works at the rate of its ATR, and takes no PPS.
+		return r.setParameters(ctx, c.slot, c.atr, c.proto, c.atr.FiDi(), false)
+	case autoPPS:
+		// The reader negotiates the card's rate, or the default if it
+		// does not take it.
+		return r.setParameters(ctx, c.slot, c.atr, c.proto, c.atr.FiDi(), true)
+	}
+	fidi, ok := r.choosePPS(c.atr)
+	if !ok || o.NoPPS || r.desc.ExchangeLevel() != LevelTPDU {
 		// Without a PPS, a card in negotiable mode works at the default
 		// rate.
-		fidi = 0x11
+		return r.setParameters(ctx, c.slot, c.atr, c.proto, 0x11, false)
 	}
+	agreed, err := r.pps(ctx, c.slot, c.proto, fidi)
+	if err == nil {
+		if err = r.setParameters(ctx, c.slot, c.atr, c.proto, agreed, false); err == nil || agreed == 0x11 {
+			return err
+		}
+		var ce *CommandError
+		if !errors.As(err, &ce) {
+			return err
+		}
+	} else if !errors.Is(err, errPPSFailed) {
+		return err
+	}
+	// The card is at a rate the reader does not take, or in an unknown
+	// state after a failed PPS: reset it, and stay at the default.
+	r.exchange(ctx, Message{Type: PCtoRDRIccPowerOff, Slot: c.slot})
+	raw, err := r.powerOn(ctx, c.slot, o.Voltage)
+	if err != nil {
+		return err
+	}
+	if c.atr, err = ParseATR(raw); err != nil {
+		return err
+	}
+	return r.setParameters(ctx, c.slot, c.atr, c.proto, 0x11, false)
+}
+
+// setParameters sets the reader's parameters for protocol p at rate
+// fidi; with fallback, a rate the reader refuses is replaced with the
+// default.
+func (r *Reader) setParameters(ctx context.Context, slot byte, atr ATR, p Protocol, fidi byte, fallback bool) error {
 	var conv byte
 	if atr.Inverse {
 		conv = 0x02
@@ -190,7 +236,7 @@ func (r *Reader) setParameters(ctx context.Context, slot byte, atr ATR, p Protoc
 	m := Message{Type: PCtoRDRSetParameters, Slot: slot, Param: [3]byte{byte(p)}, Data: data(fidi)}
 	res, err := r.exchange(ctx, m)
 	var ce *CommandError
-	if errors.As(err, &ce) && ce.Code == fiDiOffset && fidi != 0x11 && !specific {
+	if fallback && errors.As(err, &ce) && ce.Code == fiDiOffset && fidi != 0x11 {
 		m.Data = data(0x11)
 		res, err = r.exchange(ctx, m)
 	}

@@ -64,6 +64,13 @@ type Options struct {
 	// RejectFiDi makes SetParameters fail at bmFindexDindex for any value
 	// but 0x11.
 	RejectFiDi bool
+	// MaxDataRate is dwMaxDataRate; 344086 when 0.
+	MaxDataRate uint32
+	// RejectPPS has the card not answer a PPS, and then not answer
+	// anything until it is powered on again.
+	RejectPPS bool
+	// PPSDefault has the card answer a PPS without PPS1: the default rate.
+	PPSDefault bool
 
 	// T=1 at TPDU level: the card's faults.
 
@@ -106,6 +113,24 @@ type Reader struct {
 	closed    bool
 
 	t1 t1Card
+
+	ppsReq   []byte // the last PPS request
+	confused bool   // after a failed PPS, until powered on again
+	powerOns int
+}
+
+// PPS returns the last PPS request received, nil before one.
+func (r *Reader) PPS() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.ppsReq)
+}
+
+// PowerOns counts the IccPowerOn commands that powered the card.
+func (r *Reader) PowerOns() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.powerOns
 }
 
 // t1Card is the state of the simulated card's T=1 protocol.
@@ -158,6 +183,9 @@ func NewReader(card Card, o Options) *Reader {
 	if o.Protocols == 0 {
 		o.Protocols = 3
 	}
+	if o.MaxDataRate == 0 {
+		o.MaxDataRate = 344086
+	}
 	if o.Voltages == 0 {
 		o.Voltages = ccid.Voltage5V | ccid.Voltage3V | ccid.Voltage18V
 	}
@@ -173,7 +201,7 @@ func (r *Reader) Descriptor() ccid.Descriptor {
 		DefaultClock:     4000,
 		MaximumClock:     4000,
 		DataRate:         10752,
-		MaxDataRate:      344086,
+		MaxDataRate:      r.o.MaxDataRate,
 		MaxIFSD:          254,
 		Features:         uint32(r.o.Level) | r.o.Features,
 		MaxMessageLength: uint32(r.o.MaxMessageLength),
@@ -310,7 +338,8 @@ func (r *Reader) handle(m ccid.Message) []ccid.Message {
 		if v := voltageOf[m.Param[0]]; v != 0 && r.o.CardVoltages != 0 && r.o.CardVoltages&v == 0 {
 			return []ccid.Message{r.failed(ccid.RDRtoPCDataBlock, errICCMute)}
 		}
-		r.powered, r.protocol, r.pending = true, -1, nil
+		r.powered, r.protocol, r.pending, r.confused = true, -1, nil, false
+		r.powerOns++
 		r.t1 = t1Card{ifsd: 32}
 		return []ccid.Message{r.ok(ccid.RDRtoPCDataBlock, 0, r.card.ATR())}
 	case ccid.PCtoRDRIccPowerOff:
@@ -333,8 +362,20 @@ func (r *Reader) handle(m ccid.Message) []ccid.Message {
 	case ccid.PCtoRDREscape:
 		return []ccid.Message{r.ok(ccid.RDRtoPCEscape, 0, m.Data)}
 	case ccid.PCtoRDRXfrBlock:
-		if !r.powered {
+		if !r.powered || r.confused {
 			return []ccid.Message{r.failed(ccid.RDRtoPCDataBlock, errICCMute)}
+		}
+		if r.o.Level == ccid.LevelTPDU && r.protocol == -1 && len(m.Data) > 0 && m.Data[0] == 0xFF {
+			r.ppsReq = slices.Clone(m.Data)
+			switch {
+			case r.o.RejectPPS:
+				r.confused = true
+				return []ccid.Message{r.failed(ccid.RDRtoPCDataBlock, errICCMute)}
+			case r.o.PPSDefault:
+				pps0 := m.Data[1] & 0x0F
+				return []ccid.Message{r.ok(ccid.RDRtoPCDataBlock, 0, []byte{0xFF, pps0, 0xFF ^ pps0})}
+			}
+			return []ccid.Message{r.ok(ccid.RDRtoPCDataBlock, 0, m.Data)}
 		}
 		var res []ccid.Message
 		for range r.o.TimeExtensions {

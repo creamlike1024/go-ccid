@@ -10,8 +10,10 @@
 // A [Reader] exchanges CCID messages with the reader: it numbers them,
 // waits through the time extensions the reader asks for and drops stale
 // responses of earlier commands. [Reader.Connect] powers a card on, reads
-// its ATR, chooses the protocol (T=0 or T=1) and sets the reader's
-// parameters, and returns a [Card], whose [Card.Transmit] sends a command
+// its ATR, chooses the protocol (T=0 or T=1) and its rate (with a PPS
+// of its own for a TPDU level reader that makes none, unless
+// [ConnectOptions.NoPPS]), sets the reader's parameters, and returns a
+// [Card], whose [Card.Transmit] sends a command
 // APDU and returns the response APDU at the reader's exchange level:
 //
 //   - short or extended APDU level: the reader handles the protocol, and
