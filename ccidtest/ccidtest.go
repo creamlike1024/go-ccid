@@ -64,6 +64,22 @@ type Options struct {
 	// RejectFiDi makes SetParameters fail at bmFindexDindex for any value
 	// but 0x11.
 	RejectFiDi bool
+
+	// T=1 at TPDU level: the card's faults.
+
+	// T1WTX is how many S(WTX request) precede each answer to a complete
+	// APDU.
+	T1WTX int
+	// T1LoseResponses loses the next answers of the card: the reader
+	// reports ICC_MUTE, as at the end of the block waiting time.
+	T1LoseResponses int
+	// T1CorruptResponses spoils the LRC of the next answers.
+	T1CorruptResponses int
+	// T1IFSRequest, when not 0, has the card send S(IFS request) with it
+	// before its first answer to an APDU.
+	T1IFSRequest byte
+	// T1IgnoreResynch has the card not answer S(RESYNCH request).
+	T1IgnoreResynch bool
 }
 
 // ErrTimeout is returned by Read when no response is pending, as a USB
@@ -88,6 +104,47 @@ type Reader struct {
 	cmdChain  []byte
 	respChain []byte
 	closed    bool
+
+	t1 t1Card
+}
+
+// t1Card is the state of the simulated card's T=1 protocol.
+type t1Card struct {
+	ns, nr     byte   // N(S) of its next I-block, N(S) expected of the host
+	ifsd       int    // the host's information field size
+	ifsc       int    // its own, 0 for the ATR's
+	cmd        []byte // the command APDU being received
+	resp       []byte // the rest of the response to send
+	last       []byte // the last block sent, for retransmission
+	wtxLeft    int
+	ifsDone    bool
+	resyncs    int
+	gotIFSD    byte
+	pendingRsp bool // the response waits behind WTX or IFS requests
+}
+
+// T1Stats are what the simulated T=1 card saw.
+type T1Stats struct {
+	// IFSD is the INF of the host's last S(IFS request), 0 without one.
+	IFSD byte
+	// Resynchs counts the S(RESYNCH request) answered.
+	Resynchs int
+}
+
+// SetFaults sets the T=1 faults of the options (T1WTX, T1LoseResponses,
+// T1CorruptResponses, T1IFSRequest, T1IgnoreResynch) from now on.
+func (r *Reader) SetFaults(o Options) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.o.T1WTX, r.o.T1LoseResponses, r.o.T1CorruptResponses = o.T1WTX, o.T1LoseResponses, o.T1CorruptResponses
+	r.o.T1IFSRequest, r.o.T1IgnoreResynch = o.T1IFSRequest, o.T1IgnoreResynch
+}
+
+// T1 returns what the simulated T=1 card saw.
+func (r *Reader) T1() T1Stats {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return T1Stats{IFSD: r.t1.gotIFSD, Resynchs: r.t1.resyncs}
 }
 
 // NewReader returns a simulated reader holding card, which may be nil.
@@ -254,6 +311,7 @@ func (r *Reader) handle(m ccid.Message) []ccid.Message {
 			return []ccid.Message{r.failed(ccid.RDRtoPCDataBlock, errICCMute)}
 		}
 		r.powered, r.protocol, r.pending = true, -1, nil
+		r.t1 = t1Card{ifsd: 32}
 		return []ccid.Message{r.ok(ccid.RDRtoPCDataBlock, 0, r.card.ATR())}
 	case ccid.PCtoRDRIccPowerOff:
 		r.powered = false
@@ -283,6 +341,19 @@ func (r *Reader) handle(m ccid.Message) []ccid.Message {
 			res = append(res, ccid.Message{Type: ccid.RDRtoPCDataBlock, Param: [3]byte{r.status(ccid.CommandTimeExtension), 1}})
 		}
 		level := uint16(m.Param[1]) | uint16(m.Param[2])<<8
+		if r.o.Level == ccid.LevelTPDU && r.protocol == 1 {
+			blk := r.tpduT1(m.Data)
+			switch {
+			case r.o.T1LoseResponses > 0:
+				r.o.T1LoseResponses--
+				return append(res, r.failed(ccid.RDRtoPCDataBlock, errICCMute))
+			case r.o.T1CorruptResponses > 0:
+				r.o.T1CorruptResponses--
+				blk = slices.Clone(blk)
+				blk[len(blk)-1] ^= 0xFF
+			}
+			return append(res, r.ok(ccid.RDRtoPCDataBlock, 0, blk))
+		}
 		if r.o.Level == ccid.LevelTPDU {
 			return append(res, r.ok(ccid.RDRtoPCDataBlock, 0, r.tpduT0(m.Data)))
 		}
@@ -383,4 +454,123 @@ func (r *Reader) xfrAPDU(data []byte, level uint16) ccid.Message {
 	}
 	r.respChain = slices.Clone(resp[room:])
 	return r.ok(ccid.RDRtoPCDataBlock, beginMore, resp[:room])
+}
+
+func t1Encode(pcb byte, inf []byte) []byte {
+	b := append([]byte{0x00, pcb, byte(len(inf))}, inf...)
+	var x byte
+	for _, c := range b {
+		x ^= c
+	}
+	return append(b, x)
+}
+
+// tpduT1 plays a T=1 card behind a TPDU level reader: it answers one
+// block from the host with one block.
+func (r *Reader) tpduT1(b []byte) []byte {
+	t := &r.t1
+	send := func(blk []byte) []byte {
+		t.last = blk
+		return blk
+	}
+	rblock := func(errBits byte) []byte { return send(t1Encode(0x80|t.nr<<4|errBits, nil)) }
+	var x byte
+	for _, c := range b {
+		x ^= c
+	}
+	if len(b) < 4 || int(b[2]) != len(b)-4 || x != 0 {
+		return rblock(0x01)
+	}
+	pcb, inf := b[1], b[3:len(b)-1]
+	ifsc := t.ifsc
+	if ifsc == 0 {
+		ifsc = 32
+		if a, err := ccid.ParseATR(r.card.ATR()); err == nil {
+			ifsc = int(a.IFSC())
+		}
+	}
+	switch {
+	case pcb&0xC0 == 0xC0: // S-block
+		switch pcb {
+		case 0xC1: // IFS request
+			if len(inf) != 1 {
+				return rblock(0x02)
+			}
+			t.ifsd, t.gotIFSD = int(inf[0]), inf[0]
+			return send(t1Encode(0xE1, inf))
+		case 0xC0: // RESYNCH request
+			if r.o.T1IgnoreResynch {
+				return rblock(0x02)
+			}
+			*t = t1Card{ifsd: 32, resyncs: t.resyncs + 1, gotIFSD: t.gotIFSD}
+			return send(t1Encode(0xE0, nil))
+		case 0xE3, 0xE1: // WTX or IFS response: on with the response
+			if t.pendingRsp {
+				return r.t1Answer()
+			}
+		}
+		return rblock(0x02)
+	case pcb&0xC0 == 0x80: // R-block
+		nr := pcb >> 4 & 1
+		if len(t.resp) > 0 && nr == t.ns && !t.pendingRsp {
+			return r.t1Next()
+		}
+		if t.last == nil {
+			return rblock(0x02)
+		}
+		return send(t.last)
+	}
+	// I-block
+	ns, more := pcb>>6&1, pcb&0x20 != 0
+	if ns != t.nr {
+		// A block already received, sent again: what answered it is lost.
+		if t.last != nil {
+			return send(t.last)
+		}
+		return rblock(0x02)
+	}
+	if len(inf) > ifsc {
+		return rblock(0x02)
+	}
+	t.nr ^= 1
+	t.cmd = append(t.cmd, inf...)
+	if more {
+		return rblock(0)
+	}
+	t.resp = r.card.Transmit(t.cmd)
+	t.cmd = nil
+	t.wtxLeft = r.o.T1WTX
+	t.pendingRsp = true
+	return r.t1Answer()
+}
+
+// t1Answer sends what comes before the response, then its first block.
+func (r *Reader) t1Answer() []byte {
+	t := &r.t1
+	if r.o.T1IFSRequest != 0 && !t.ifsDone {
+		t.ifsDone, t.ifsc = true, int(r.o.T1IFSRequest)
+		t.last = t1Encode(0xC1, []byte{r.o.T1IFSRequest})
+		return t.last
+	}
+	if t.wtxLeft > 0 {
+		t.wtxLeft--
+		t.last = t1Encode(0xC3, []byte{1})
+		return t.last
+	}
+	t.pendingRsp = false
+	return r.t1Next()
+}
+
+// t1Next sends the next I-block of the response.
+func (r *Reader) t1Next() []byte {
+	t := &r.t1
+	n := min(t.ifsd, len(t.resp))
+	pcb := t.ns << 6
+	if n < len(t.resp) {
+		pcb |= 0x20
+	}
+	t.last = t1Encode(pcb, t.resp[:n])
+	t.resp = t.resp[n:]
+	t.ns ^= 1
+	return t.last
 }

@@ -35,6 +35,7 @@ type Card struct {
 	level  ExchangeLevel
 	autoGR bool
 	closed bool
+	t1     t1State
 }
 
 // ATR returns the card's ATR.
@@ -75,8 +76,8 @@ func (r *Reader) Connect(ctx context.Context, slot byte, o *ConnectOptions) (*Ca
 	if c.proto, err = r.chooseProtocol(c.atr, o.Prefer); err != nil {
 		return fail(err)
 	}
-	if level == LevelTPDU && c.proto == T1 {
-		return fail(fmt.Errorf("%w: T=1 at TPDU level", ErrNotSupported))
+	if level == LevelTPDU && c.proto == T1 && c.atr.CRC() {
+		return fail(fmt.Errorf("%w: T=1 with CRC at TPDU level", ErrNotSupported))
 	}
 	if level == LevelTPDU || r.desc.Features&FeatureAutoParameters == 0 {
 		if err := r.setParameters(ctx, slot, c.atr, c.proto); err != nil {
@@ -85,6 +86,11 @@ func (r *Reader) Connect(ctx context.Context, slot byte, o *ConnectOptions) (*Ca
 	} else if p, err := r.getProtocol(ctx, slot); err == nil {
 		// The reader set the parameters from the ATR itself.
 		c.proto = p
+	}
+	if level == LevelTPDU && c.proto == T1 {
+		if err := c.startT1(ctx); err != nil {
+			return fail(err)
+		}
 	}
 	return c, nil
 }
@@ -241,15 +247,24 @@ func (c *Card) Transmit(ctx context.Context, apdu []byte) ([]byte, error) {
 	case LevelExtendedAPDU:
 		return c.transmitAPDU(ctx, apdu)
 	}
+	if c.proto == T1 {
+		return c.transmitT1(ctx, apdu)
+	}
 	return c.transmitT0(ctx, cmd)
 }
 
 // xfr sends one XfrBlock and returns its RDR_to_PC_DataBlock.
 func (c *Card) xfr(ctx context.Context, data []byte, level uint16) (Message, error) {
+	return c.xfrBWI(ctx, 0, data, level)
+}
+
+// xfrBWI is xfr with bBWI, the multiple of the block waiting time a T=1
+// block may take at TPDU level (0 for the default).
+func (c *Card) xfrBWI(ctx context.Context, bwi byte, data []byte, level uint16) (Message, error) {
 	res, err := c.r.exchange(ctx, Message{
 		Type:  PCtoRDRXfrBlock,
 		Slot:  c.slot,
-		Param: [3]byte{0, byte(level), byte(level >> 8)},
+		Param: [3]byte{bwi, byte(level), byte(level >> 8)},
 		Data:  data,
 	})
 	if err != nil {

@@ -121,18 +121,6 @@ func TestConnectRate(t *testing.T) {
 	}
 }
 
-func TestConnectT1AtTPDULevelUnsupported(t *testing.T) {
-	r, sim := open(t, &testCard{atr: ccidtest.ATRT0T1}, ccidtest.Options{})
-	_, err := r.Connect(context.Background(), 0, &ccid.ConnectOptions{Prefer: []ccid.Protocol{ccid.T1}})
-	if !errors.Is(err, ccid.ErrNotSupported) {
-		t.Fatalf("Connect T=1 at TPDU level: %v", err)
-	}
-	cmds := sim.Commands()
-	if last := cmds[len(cmds)-1].Type; last != ccid.PCtoRDRIccPowerOff {
-		t.Errorf("card left powered: last command %v", last)
-	}
-}
-
 func TestConnectTriesVoltages(t *testing.T) {
 	r, sim := open(t, &testCard{atr: ccidtest.ATRT0}, ccidtest.Options{CardVoltages: ccid.Voltage5V})
 	connect(t, r, nil)

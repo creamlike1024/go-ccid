@@ -15,15 +15,17 @@ an app gets the reader's file descriptor from `UsbManager` and hands it over.
   independent of how bytes reach the reader. CCID messages, time
   extensions, stale responses, the ATR, protocol and parameter selection,
   short and extended APDUs with chaining, T=0 at TPDU level (with optional
-  GET RESPONSE and Le correction), and the reader's descriptors (exchange
-  level, maximum message length, endpoints).
+  GET RESPONSE and Le correction), T=1 at TPDU level (chaining, IFS, WTX,
+  error recovery and resynchronization; LRC only), and the reader's
+  descriptors (exchange level, maximum message length, endpoints; ICCD
+  devices of control transfers are told apart).
 - `go-ccid/usbfs`: the transport for Linux and Android, through the
   kernel's usbfs, in pure Go: open a device file, or take the file
   descriptor of Android's `UsbDeviceConnection`; list the readers attached
   (Linux, from sysfs).
 - `go-ccid/ccidtest`: a simulated reader and card, for tests of this
   package and of the programs that use it.
-- Planned: T=1 at TPDU level. Other transports (macOS, Windows) may follow.
+- Planned: other transports (macOS, Windows).
 
 ## Linux
 

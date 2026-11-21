@@ -20,6 +20,10 @@
 //     case 4 command is left out, as ISO/IEC 7816-3 requires), and with
 //     [ConnectOptions.AutoGetResponse] the GET RESPONSE and Le correction
 //     of 61xx and 6Cxx are done here;
+//   - TPDU level, T=1: the block protocol runs here, with chaining both
+//     ways, the IFSD negotiated, WTX and IFS requests of the card answered,
+//     and lost or garbled blocks asked for again, then the protocol
+//     resynchronized ([ErrResynchronized]); LRC only, as UICCs use;
 //   - character level is not supported.
 //
 // By default Transmit returns the card's status words as they are, as
