@@ -7,7 +7,10 @@ without pcscd, PC/SC or cgo.
 It is meant for systems where PC/SC is not available, such as Android, where
 an app gets the reader's file descriptor from `UsbManager` and hands it over.
 
-**Status: under development, not usable yet.** The API will change.
+**Status: early.** On real hardware it has read cards on Android with one
+reader so far (an ACS ACR38U, TPDU level, T=0); longer exchanges, T=1 and
+other readers are tested against the simulated reader only. The API may
+change.
 
 ## Scope
 
@@ -17,15 +20,22 @@ an app gets the reader's file descriptor from `UsbManager` and hands it over.
   (with the PPS that TPDU level readers leave to the host),
   short and extended APDUs with chaining, T=0 at TPDU level (with optional
   GET RESPONSE and Le correction), T=1 at TPDU level (chaining, IFS, WTX,
-  error recovery and resynchronization; LRC only), and the reader's
+  error recovery and resynchronization; LRC only), the reader's
   descriptors (exchange level, maximum message length, endpoints; ICCD
-  devices of control transfers are told apart).
+  devices of control transfers are told apart), and ABORT, which a
+  command whose context ends sends by itself on a transport of control
+  transfers.
 - `go-ccid/usbfs`: the transport for Linux and Android, through the
   kernel's usbfs, in pure Go: open a device file, or take the file
   descriptor of Android's `UsbDeviceConnection`; list the readers attached
-  (Linux, from sysfs).
+  (Linux, from sysfs). Transfers are URBs the kernel keeps until they
+  complete, which a context discards.
 - `go-ccid/ccidtest`: a simulated reader and card, for tests of this
-  package and of the programs that use it.
+  package and of the programs that use it, with the faults to test against:
+  a card that takes its time, one removed, a reader unplugged, T=1 errors.
+- Not supported: character level readers, ICCD A and B, T=1 with CRC,
+  extended APDUs on T=0, the interrupt endpoint (card insertion and
+  removal), PIN commands.
 - Planned: other transports (macOS, Windows).
 
 ## Linux
