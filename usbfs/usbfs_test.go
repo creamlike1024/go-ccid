@@ -20,12 +20,14 @@ func TestRequestNumbers(t *testing.T) {
 	if iocSizeBits != 14 {
 		t.Skip("MIPS or PowerPC encoding")
 	}
-	bulk := uintptr(0xC0185502)
+	submit, reap := uintptr(0x8038550A), uintptr(0x4008550C)
 	if unsafe.Sizeof(uintptr(0)) == 4 {
-		bulk = 0xC0105502
+		submit, reap = 0x802C550A, 0x4004550C
 	}
 	for name, c := range map[string][2]uintptr{
-		"BULK":             {reqBulk, bulk},
+		"SUBMITURB":        {reqSubmitURB, submit},
+		"DISCARDURB":       {reqDiscardURB, 0x0000550B},
+		"REAPURB":          {reqReapURB, reap},
 		"SETINTERFACE":     {reqSetInterface, 0x80085504},
 		"CLAIMINTERFACE":   {reqClaimInterface, 0x8004550F},
 		"RELEASEINTERFACE": {reqReleaseInterface, 0x80045510},
@@ -35,6 +37,32 @@ func TestRequestNumbers(t *testing.T) {
 	} {
 		if c[0] != c[1] {
 			t.Errorf("USBDEVFS_%s = %#x, want %#x", name, c[0], c[1])
+		}
+	}
+}
+
+// urb is laid out as struct usbdevfs_urb.
+func TestURBLayout(t *testing.T) {
+	var u urb
+	want := map[string][2]uintptr{
+		"status":       {unsafe.Offsetof(u.status), 4},
+		"flags":        {unsafe.Offsetof(u.flags), 8},
+		"actualLength": {unsafe.Offsetof(u.actualLength), 0},
+		"userContext":  {unsafe.Offsetof(u.userContext), 0},
+		"size":         {unsafe.Sizeof(u), 0},
+	}
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		want["actualLength"] = [2]uintptr{want["actualLength"][0], 28}
+		want["userContext"] = [2]uintptr{want["userContext"][0], 48}
+		want["size"] = [2]uintptr{want["size"][0], 56}
+	} else {
+		want["actualLength"] = [2]uintptr{want["actualLength"][0], 20}
+		want["userContext"] = [2]uintptr{want["userContext"][0], 40}
+		want["size"] = [2]uintptr{want["size"][0], 44}
+	}
+	for name, c := range want {
+		if c[0] != c[1] {
+			t.Errorf("%s at %d, want %d", name, c[0], c[1])
 		}
 	}
 }
@@ -74,8 +102,8 @@ func TestFromFDReadsDescriptors(t *testing.T) {
 	if len(ifs) != 1 || ifs[0].BulkIn != 0x82 || ifs[0].BulkOut != 0x02 {
 		t.Fatalf("interfaces %+v", ifs)
 	}
-	// A plain file takes no ioctl.
-	if _, err := d.Claim(ifs[0]); !errors.Is(err, syscall.ENOTTY) {
+	// A plain file takes no ioctl (Android's SELinux denies it first).
+	if _, err := d.Claim(ifs[0]); !errors.Is(err, syscall.ENOTTY) && !errors.Is(err, syscall.EACCES) {
 		t.Errorf("Claim on a plain file: %v, want ENOTTY", err)
 	}
 	if err := d.Close(); err != nil {

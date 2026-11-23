@@ -15,11 +15,26 @@ func ioc(dir, typ, nr, size uintptr) uintptr {
 	return dir<<dirShift | typ<<typeShift | nr<<nrShift | size<<sizeShift
 }
 
-// bulkTransfer is struct usbdevfs_bulktransfer.
-type bulkTransfer struct {
-	ep, len, timeout uint32 // timeout in milliseconds, 0 for none
-	data             unsafe.Pointer
+// urb is struct usbdevfs_urb, without the frames of isochronous
+// transfers. Go lays it out as C does: 56 bytes with 64-bit pointers, 44
+// with 32-bit ones.
+type urb struct {
+	typ             uint8
+	endpoint        uint8
+	status          int32 // 0, or a negated errno
+	flags           uint32
+	buffer          unsafe.Pointer
+	bufferLength    int32
+	actualLength    int32
+	startFrame      int32
+	numberOfPackets int32
+	errorCount      int32
+	signr           uint32
+	userContext     unsafe.Pointer
 }
+
+// urbTypeBulk is USBDEVFS_URB_TYPE_BULK.
+const urbTypeBulk = 3
 
 // setInterface is struct usbdevfs_setinterface.
 type setInterface struct {
@@ -38,7 +53,9 @@ const disconnectClaimExceptDriver = 0x02
 // of some of them backwards (_IOR for a value it reads); what counts is
 // that the number is the same.
 var (
-	reqBulk             = ioc(iocRead|iocWrite, 'U', 2, unsafe.Sizeof(bulkTransfer{}))
+	reqSubmitURB        = ioc(iocRead, 'U', 10, unsafe.Sizeof(urb{}))
+	reqDiscardURB       = ioc(iocNone, 'U', 11, 0)
+	reqReapURB          = ioc(iocWrite, 'U', 12, unsafe.Sizeof(uintptr(0)))
 	reqSetInterface     = ioc(iocRead, 'U', 4, unsafe.Sizeof(setInterface{}))
 	reqClaimInterface   = ioc(iocRead, 'U', 15, unsafe.Sizeof(uint32(0)))
 	reqReleaseInterface = ioc(iocRead, 'U', 16, unsafe.Sizeof(uint32(0)))

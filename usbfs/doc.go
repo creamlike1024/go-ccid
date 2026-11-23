@@ -28,5 +28,9 @@
 // An interface claimed by another program, such as pcscd, cannot be
 // claimed: Claim then fails with ErrBusy.
 //
+// Each transfer is a URB submitted to the kernel, which keeps it until it
+// completes: a response that comes late is not lost to a timeout, and a
+// context that is done discards the transfer at once.
+//
 // The package builds on Linux and Android only.
 package usbfs

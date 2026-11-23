@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -40,12 +39,6 @@ type Options struct {
 	DetachKernelDriver bool
 }
 
-// pollInterval is how long a read waits at once while its context may be
-// cancelled. A read the kernel times out loses what it had received of
-// a transfer, so it is kept long: readers send a response in a few
-// milliseconds once they start.
-const pollInterval = time.Second
-
 // Device is a USB device opened through usbfs.
 type Device struct {
 	fd      int
@@ -58,6 +51,8 @@ type Device struct {
 	mu      sync.Mutex
 	closed  bool
 	claimed map[byte]*Endpoints
+
+	reaper reaper
 }
 
 // Open opens a usbfs device file, as /dev/bus/usb/001/005. Close closes
@@ -87,6 +82,7 @@ func newDevice(fd int, owned bool, o *Options) (*Device, error) {
 		o = &Options{}
 	}
 	d := &Device{fd: fd, owned: owned, timeout: o.Timeout, detach: o.DetachKernelDriver, claimed: map[byte]*Endpoints{}}
+	d.reaper.init()
 	if d.timeout <= 0 {
 		d.timeout = 10 * time.Second
 	}
@@ -222,33 +218,6 @@ func (d *Device) ioctl(req uintptr, arg unsafe.Pointer) error {
 	}
 }
 
-// bulk runs one bulk transfer and returns its length.
-func (d *Device) bulk(ep byte, p []byte, timeout time.Duration) (int, error) {
-	ms := timeout.Milliseconds()
-	if ms < 1 {
-		ms = 1 // 0 would wait forever
-	}
-	bt := &bulkTransfer{ep: uint32(ep), len: uint32(len(p)), timeout: uint32(min(ms, 1<<31))}
-	var pin runtime.Pinner
-	defer pin.Unpin()
-	if len(p) > 0 {
-		pin.Pin(&p[0])
-		bt.data = unsafe.Pointer(&p[0])
-	}
-	for {
-		n, _, e := syscall.Syscall(syscall.SYS_IOCTL, uintptr(d.fd), reqBulk, uintptr(unsafe.Pointer(bt)))
-		switch e {
-		case 0:
-			return int(n), nil
-		case syscall.EINTR:
-			continue
-		case syscall.EPIPE:
-			d.ioctl(reqClearHalt, unsafe.Pointer(&bt.ep))
-		}
-		return 0, mapErr(e)
-	}
-}
-
 func mapErr(err error) error {
 	switch err {
 	case nil:
@@ -314,7 +283,7 @@ func (e *Endpoints) Write(ctx context.Context, p []byte) error {
 	if err != nil {
 		return err
 	}
-	n, err := e.d.bulk(e.iface.BulkOut, p, t)
+	n, err := e.d.transfer(ctx, e.iface.BulkOut, p, t)
 	if err != nil {
 		return err
 	}
@@ -325,7 +294,7 @@ func (e *Endpoints) Write(ctx context.Context, p []byte) error {
 }
 
 // Read receives one transfer from the bulk-IN endpoint. It returns the
-// context's error once it is done, within about a second.
+// context's error as soon as the context is done.
 func (e *Endpoints) Read(ctx context.Context, p []byte) (int, error) {
 	if err := e.check(); err != nil {
 		return 0, err
@@ -334,25 +303,7 @@ func (e *Endpoints) Read(ctx context.Context, p []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// A transfer the kernel times out loses its data: with a context that
-	// cannot be cancelled, wait at once.
-	if ctx.Done() == nil {
-		return e.d.bulk(e.iface.BulkIn, p, t)
-	}
-	end := time.Now().Add(t)
-	for {
-		left := time.Until(end)
-		n, err := e.d.bulk(e.iface.BulkIn, p, min(left, pollInterval))
-		if err != ErrTimeout {
-			return n, err
-		}
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		if time.Until(end) <= 0 {
-			return 0, ErrTimeout
-		}
-	}
+	return e.d.transfer(ctx, e.iface.BulkIn, p, t)
 }
 
 // Close releases the interface. The Device stays open.
