@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Direction of a traced message.
@@ -92,6 +93,7 @@ func (r *Reader) exchange(ctx context.Context, m Message) (Message, error) {
 	for stale := 0; ; {
 		res, err := r.read(ctx)
 		if err != nil {
+			r.abortAfter(ctx, m)
 			return Message{}, fmt.Errorf("ccid: waiting for the response to %v: %w", m.Type, err)
 		}
 		if res.Seq != m.Seq || res.Slot != m.Slot {
@@ -110,6 +112,59 @@ func (r *Reader) exchange(ctx context.Context, m Message) (Message, error) {
 		}
 		return res, nil
 	}
+}
+
+// requestAbort is the class-specific request ABORT (CCID 5.3.1).
+const requestAbort = 0x01
+
+// abortTimeout bounds the ABORT that follows a command whose context
+// ended.
+const abortTimeout = 2 * time.Second
+
+// Abort stops what the reader does in slot and readies the slot for a new
+// command: the control pipe's ABORT, then PC_to_RDR_Abort, whose
+// RDR_to_PC_SlotStatus ends the responses to drop (CCID 5.3.1). It needs
+// a Transport that is a Controller, and fails with ErrNotSupported
+// otherwise.
+//
+// An exchange whose context ends while it waits for the response aborts
+// by itself, on such a Transport.
+func (r *Reader) Abort(ctx context.Context, slot byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.abort(ctx, slot)
+}
+
+func (r *Reader) abort(ctx context.Context, slot byte) error {
+	c, ok := r.t.(Controller)
+	if !ok {
+		return fmt.Errorf("%w: ABORT needs control transfers", ErrNotSupported)
+	}
+	// The ABORT and the PC_to_RDR_Abort share a sequence number: the next
+	// one, which exchange gives the command.
+	if err := c.ClassRequest(ctx, requestAbort, uint16(slot)|uint16(r.seq)<<8); err != nil {
+		return fmt.Errorf("ccid: ABORT: %w", err)
+	}
+	res, err := r.exchange(ctx, Message{Type: PCtoRDRAbort, Slot: slot})
+	if err != nil {
+		return err
+	}
+	if res.Type != RDRtoPCSlotStatus {
+		return fmt.Errorf("%w: %v answered with %v", ErrProtocol, PCtoRDRAbort, res.Type)
+	}
+	return nil
+}
+
+// abortAfter aborts the command m, whose response was given up on as
+// ctx ended, so that the slot takes the next command, when the Transport
+// can.
+func (r *Reader) abortAfter(ctx context.Context, m Message) {
+	if _, ok := r.t.(Controller); !ok || m.Type == PCtoRDRAbort || ctx.Err() == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), abortTimeout)
+	defer cancel()
+	_ = r.abort(ctx, m.Slot) // the next command finds out if it failed
 }
 
 // maxEmptyReads is how many zero-length transfers in a row a response may

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"time"
 
 	ccid "github.com/creamlike1024/go-ccid"
 )
@@ -93,6 +94,9 @@ type Options struct {
 // read would time out.
 var ErrTimeout = errors.New("ccidtest: read timed out")
 
+// ErrUnplugged is returned by the transport of a reader unplugged.
+var ErrUnplugged = errors.New("ccidtest: reader unplugged")
+
 // Reader is a simulated CCID reader with one slot.
 type Reader struct {
 	mu       sync.Mutex
@@ -117,6 +121,65 @@ type Reader struct {
 	ppsReq   []byte // the last PPS request
 	confused bool   // after a failed PPS, until powered on again
 	powerOns int
+
+	holding   bool   // responses wait in held, as a busy card's
+	held      []byte // responses held back
+	unplugged bool
+	abortReq  *[2]byte // the slot and sequence of an ABORT request
+	aborts    int      // ABORT requests received
+}
+
+var _ ccid.Controller = (*Reader)(nil)
+
+// Hold keeps the responses of the next commands back, as a card that
+// takes its time: Read waits for them until its context ends. Release
+// sends them.
+func (r *Reader) Hold() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.holding = true
+}
+
+// Release sends the responses held back, and stops holding.
+func (r *Reader) Release() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.holding = false
+	r.out = append(r.out, r.held...)
+	r.held = nil
+}
+
+// Unplug takes the reader away: the transport fails from now on.
+func (r *Reader) Unplug() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.unplugged = true
+}
+
+// Aborts counts the ABORT requests received on the control pipe.
+func (r *Reader) Aborts() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.aborts
+}
+
+// ClassRequest takes a class-specific request on the control pipe: ABORT
+// (01h) is the only one simulated. It stops what the slot does, dropping
+// the responses held back, and fails the commands to the slot until the
+// PC_to_RDR_Abort of the same sequence number (CCID 5.3.1).
+func (r *Reader) ClassRequest(ctx context.Context, request byte, value uint16) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.unplugged {
+		return ErrUnplugged
+	}
+	if request != 0x01 {
+		return errors.New("ccidtest: request not supported (stall)")
+	}
+	r.aborts++
+	r.abortReq = &[2]byte{byte(value), byte(value >> 8)}
+	r.holding, r.held = false, nil
+	return nil
 }
 
 // PPS returns the last PPS request received, nil before one.
@@ -251,6 +314,9 @@ func (r *Reader) Write(ctx context.Context, p []byte) error {
 	if r.closed {
 		return errors.New("ccidtest: closed")
 	}
+	if r.unplugged {
+		return ErrUnplugged
+	}
 	if len(p) > r.o.MaxMessageLength {
 		return errors.New("ccidtest: message longer than dwMaxCCIDMessageLength")
 	}
@@ -259,20 +325,62 @@ func (r *Reader) Write(ctx context.Context, p []byte) error {
 		return err
 	}
 	r.commands = append(r.commands, m)
-	for _, res := range r.handle(m) {
+	var responses []ccid.Message
+	switch a := r.abortReq; {
+	case a != nil && m.Type == ccid.PCtoRDRAbort && a[0] == m.Slot && a[1] == m.Seq:
+		r.abortReq = nil
+		responses = []ccid.Message{r.ok(ccid.RDRtoPCSlotStatus, 0, nil)}
+	case a != nil:
+		responses = []ccid.Message{r.failed(responseType(m.Type), errCmdAborted)}
+	case m.Type == ccid.PCtoRDRAbort:
+		// Before its ABORT request: a real reader waits for it.
+		responses = []ccid.Message{r.ok(ccid.RDRtoPCSlotStatus, 0, nil)}
+	default:
+		responses = r.handle(m)
+	}
+	for _, res := range responses {
 		res.Slot, res.Seq = m.Slot, m.Seq
 		b, _ := res.MarshalBinary()
-		r.out = append(r.out, b...)
+		if r.holding {
+			r.held = append(r.held, b...)
+		} else {
+			r.out = append(r.out, b...)
+		}
 	}
 	return nil
 }
 
-// Read returns the next transfer of the pending responses.
+// responseType is the type of the response to a command of type t.
+func responseType(t ccid.MessageType) ccid.MessageType {
+	switch t {
+	case ccid.PCtoRDRIccPowerOn, ccid.PCtoRDRXfrBlock, ccid.PCtoRDRSecure:
+		return ccid.RDRtoPCDataBlock
+	case ccid.PCtoRDRGetParameters, ccid.PCtoRDRSetParameters, ccid.PCtoRDRResetParameters:
+		return ccid.RDRtoPCParameters
+	case ccid.PCtoRDREscape:
+		return ccid.RDRtoPCEscape
+	}
+	return ccid.RDRtoPCSlotStatus
+}
+
+// Read returns the next transfer of the pending responses. While
+// responses are held back it waits for them until ctx ends.
 func (r *Reader) Read(ctx context.Context, p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return 0, err
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if r.unplugged {
+			return 0, ErrUnplugged
+		}
+		if len(r.out) > 0 || !r.holding {
+			break
+		}
+		r.mu.Unlock()
+		time.Sleep(time.Millisecond)
+		r.mu.Lock()
 	}
 	if len(r.out) == 0 {
 		return 0, ErrTimeout
@@ -323,6 +431,7 @@ func (r *Reader) ok(t ccid.MessageType, third byte, data []byte) ccid.Message {
 }
 
 const (
+	errCmdAborted    = 0xFF
 	errICCMute       = 0xFE
 	errCmdNotSupport = 0x00
 )

@@ -242,7 +242,7 @@ type Endpoints struct {
 	closed bool // under d.mu
 }
 
-var _ ccid.Transport = (*Endpoints)(nil)
+var _ ccid.Controller = (*Endpoints)(nil)
 
 // Interface returns the claimed interface.
 func (e *Endpoints) Interface() ccid.Interface { return e.iface }
@@ -304,6 +304,29 @@ func (e *Endpoints) Read(ctx context.Context, p []byte) (int, error) {
 		return 0, err
 	}
 	return e.d.transfer(ctx, e.iface.BulkIn, p, t)
+}
+
+// ClassRequest sends a class-specific request with no data stage to the
+// interface, on the default control pipe: as CCID's ABORT.
+func (e *Endpoints) ClassRequest(ctx context.Context, request byte, value uint16) error {
+	if err := e.check(); err != nil {
+		return err
+	}
+	t, err := e.limit(ctx)
+	if err != nil {
+		return err
+	}
+	ct := ctrlTransfer{
+		requestType: 0x21, // host to device, class, interface
+		request:     request,
+		value:       value,
+		index:       uint16(e.iface.Number),
+		timeout:     uint32(max(t.Milliseconds(), 1)), // 0 would wait forever
+	}
+	if err := e.d.ioctl(reqControl, unsafe.Pointer(&ct)); err != nil {
+		return fmt.Errorf("usbfs: class request %#02x: %w", request, mapErr(err))
+	}
+	return nil
 }
 
 // Close releases the interface. The Device stays open.

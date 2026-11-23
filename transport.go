@@ -17,3 +17,14 @@ type Transport interface {
 	// Close releases the transport.
 	Close() error
 }
+
+// Controller is a Transport that also sends class-specific requests to
+// the reader's interface on the default control pipe: the ABORT that,
+// with PC_to_RDR_Abort, stops a command the host gave up on.
+type Controller interface {
+	Transport
+	// ClassRequest sends a class-specific request with no data stage to
+	// the reader's interface: bmRequestType 21h, wIndex the interface's
+	// number.
+	ClassRequest(ctx context.Context, request byte, value uint16) error
+}

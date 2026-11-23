@@ -20,11 +20,12 @@ func TestRequestNumbers(t *testing.T) {
 	if iocSizeBits != 14 {
 		t.Skip("MIPS or PowerPC encoding")
 	}
-	submit, reap := uintptr(0x8038550A), uintptr(0x4008550C)
+	control, submit, reap := uintptr(0xC0185500), uintptr(0x8038550A), uintptr(0x4008550C)
 	if unsafe.Sizeof(uintptr(0)) == 4 {
-		submit, reap = 0x802C550A, 0x4004550C
+		control, submit, reap = 0xC0105500, 0x802C550A, 0x4004550C
 	}
 	for name, c := range map[string][2]uintptr{
+		"CONTROL":          {reqControl, control},
 		"SUBMITURB":        {reqSubmitURB, submit},
 		"DISCARDURB":       {reqDiscardURB, 0x0000550B},
 		"REAPURB":          {reqReapURB, reap},

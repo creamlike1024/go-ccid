@@ -33,6 +33,14 @@ type urb struct {
 	userContext     unsafe.Pointer
 }
 
+// ctrlTransfer is struct usbdevfs_ctrltransfer.
+type ctrlTransfer struct {
+	requestType, request uint8
+	value, index, length uint16
+	timeout              uint32 // in milliseconds
+	data                 unsafe.Pointer
+}
+
 // urbTypeBulk is USBDEVFS_URB_TYPE_BULK.
 const urbTypeBulk = 3
 
@@ -53,6 +61,7 @@ const disconnectClaimExceptDriver = 0x02
 // of some of them backwards (_IOR for a value it reads); what counts is
 // that the number is the same.
 var (
+	reqControl          = ioc(iocRead|iocWrite, 'U', 0, unsafe.Sizeof(ctrlTransfer{}))
 	reqSubmitURB        = ioc(iocRead, 'U', 10, unsafe.Sizeof(urb{}))
 	reqDiscardURB       = ioc(iocNone, 'U', 11, 0)
 	reqReapURB          = ioc(iocWrite, 'U', 12, unsafe.Sizeof(uintptr(0)))
