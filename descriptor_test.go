@@ -3,6 +3,7 @@ package ccid_test
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	ccid "github.com/creamlike1024/go-ccid"
@@ -114,5 +115,37 @@ func TestFindInterfaces(t *testing.T) {
 	}
 	if _, err := ccid.FindInterfaces([]byte{9, 0x02, 0}); err == nil {
 		t.Error("truncated descriptors accepted")
+	}
+}
+
+// A composite device, as a security key: a HID interface, whose HID class
+// descriptor is also of type 0x21, before or after the CCID interface.
+func TestFindInterfacesComposite(t *testing.T) {
+	hid := []byte{
+		9, 0x04, 1, 0, 2, 0x03, 0, 0, 0, // interface 1: HID
+		9, 0x21, 0x11, 0x01, 0, 1, 0x22, 34, 0, // HID class descriptor
+		7, 0x05, 0x84, 0x03, 64, 0, 5, // interrupt IN
+		7, 0x05, 0x04, 0x03, 64, 0, 5, // interrupt OUT
+	}
+	ccidRaw := rawDescriptors(t, ccid.InterfaceClass, false)
+	head, ifaces := ccidRaw[:27], ccidRaw[27:] // device and configuration, then the CCID interface
+	for name, raw := range map[string][]byte{
+		"HID first": append(append(slices.Clone(head), hid...), ifaces...),
+		"HID last":  append(slices.Clone(ccidRaw), hid...),
+	} {
+		ifs, err := ccid.FindInterfaces(raw)
+		if err != nil || len(ifs) != 1 || ifs[0].Descriptor.MaxMessageLength != 271 {
+			t.Errorf("%s: %+v, %v; want the CCID interface", name, ifs, err)
+		}
+	}
+
+	// A CCID interface with a malformed class descriptor is left out, not
+	// the device's others.
+	bad := slices.Clone(ccidRaw)
+	bad[27+9] = 9 // the class descriptor, cut short
+	bad = append(bad[:27+9+9], bad[27+9+ccid.DescriptorLength:]...)
+	bad = append(bad, rawDescriptors(t, 0xFF, false)[27:]...)
+	if ifs, err := ccid.FindInterfaces(bad); err != nil || len(ifs) != 1 || ifs[0].Class != 0xFF {
+		t.Errorf("one malformed CCID interface: %+v, %v; want the other", ifs, err)
 	}
 }

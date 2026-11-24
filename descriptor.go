@@ -245,14 +245,17 @@ func FindInterfaces(raw []byte) ([]Interface, error) {
 				cur.InterruptIn = addr
 			}
 		case DescriptorType:
-			if cur == nil || haveCD {
+			// Type 0x21 is HID's class descriptor too, in the HID
+			// interface of a composite device (a security key, a reader
+			// with a keypad): only a CCID interface's is CCID's, and a
+			// malformed one leaves that interface out rather than the
+			// device.
+			if cur == nil || haveCD || cur.Class != InterfaceClass && cur.Class != 0xFF {
 				break
 			}
-			cd, err := ParseDescriptor(d)
-			if err != nil {
-				return nil, err
+			if cd, err := ParseDescriptor(d); err == nil {
+				cur.Descriptor, haveCD = cd, true
 			}
-			cur.Descriptor, haveCD = cd, true
 		}
 		i += n
 	}
