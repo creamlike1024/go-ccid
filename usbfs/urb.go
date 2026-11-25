@@ -33,8 +33,8 @@ func (r *reaper) init() {
 
 // transfer runs one bulk transfer on endpoint ep, its direction the
 // endpoint's, and returns how many bytes went. It ends with timeout, or
-// with ctx's error as ctx is done.
-func (d *Device) transfer(ctx context.Context, ep byte, p []byte, timeout time.Duration) (int, error) {
+// with ctx's error as ctx is done, and with ErrClosed as quit is closed.
+func (d *Device) transfer(ctx context.Context, ep byte, p []byte, timeout time.Duration, quit <-chan struct{}) (int, error) {
 	u := &urb{typ: urbTypeBulk, endpoint: ep, bufferLength: int32(len(p))}
 	var pin runtime.Pinner
 	defer pin.Unpin()
@@ -54,6 +54,7 @@ func (d *Device) transfer(ctx context.Context, ep byte, p []byte, timeout time.D
 		mu       sync.Mutex
 		back     bool
 		timedOut bool
+		closed   bool
 	)
 	stop := make(chan struct{})
 	go func() {
@@ -63,6 +64,10 @@ func (d *Device) transfer(ctx context.Context, ep byte, p []byte, timeout time.D
 		case <-stop:
 			return
 		case <-ctx.Done():
+		case <-quit:
+			mu.Lock()
+			closed = true
+			mu.Unlock()
 		case <-t.C:
 			mu.Lock()
 			timedOut = true
@@ -78,7 +83,7 @@ func (d *Device) transfer(ctx context.Context, ep byte, p []byte, timeout time.D
 	err := d.wait(uintptr(unsafe.Pointer(u)))
 	mu.Lock()
 	back = true
-	expired := timedOut
+	expired, quitted := timedOut, closed
 	mu.Unlock()
 	close(stop)
 	if err != nil {
@@ -90,7 +95,10 @@ func (d *Device) transfer(ctx context.Context, ep byte, p []byte, timeout time.D
 	case u.status == 0:
 		return n, nil
 	case errno == syscall.ENOENT || errno == syscall.ECONNRESET:
-		// Discarded: the context's end, or the time's.
+		// Discarded: the context's end, the time's, or a Close.
+		if quitted {
+			return n, ErrClosed
+		}
 		if expired {
 			return n, ErrTimeout
 		}

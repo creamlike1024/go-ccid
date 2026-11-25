@@ -157,7 +157,7 @@ func (d *Device) Claim(i ccid.Interface) (*Endpoints, error) {
 			return nil, fmt.Errorf("usbfs: alternate setting %d of interface %d: %w", i.AltSetting, i.Number, mapErr(err))
 		}
 	}
-	e := &Endpoints{d: d, iface: i}
+	e := &Endpoints{d: d, iface: i, quit: make(chan struct{})}
 	d.claimed[i.Number] = e
 	return e, nil
 }
@@ -188,19 +188,25 @@ func (d *Device) Reset() error {
 }
 
 // Close releases the claimed interfaces and, for a Device of Open,
-// closes the file.
+// closes the file. Transfers under way end, with ErrClosed, before it
+// returns.
 func (d *Device) Close() error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.closed {
+		d.mu.Unlock()
 		return nil
 	}
 	d.closed = true
-	for n, e := range d.claimed {
-		e.closed = true
-		d.release(uint32(n))
+	claimed := d.claimed
+	for _, e := range claimed {
+		e.stop()
 	}
 	d.claimed = nil
+	d.mu.Unlock()
+	for n, e := range claimed {
+		e.busy.Wait()
+		d.release(uint32(n))
+	}
 	if d.owned {
 		return syscall.Close(d.fd)
 	}
@@ -242,6 +248,13 @@ type Endpoints struct {
 	d      *Device
 	iface  ccid.Interface
 	closed bool // under d.mu
+	// quit is closed as the Endpoints close: transfers under way discard
+	// their URBs.
+	quit chan struct{}
+	// busy counts the transfers under way, which Close waits for: the
+	// kernel frees the URBs of a released interface without giving them
+	// back, which would leave their waiters waiting.
+	busy sync.WaitGroup
 }
 
 var _ ccid.Controller = (*Endpoints)(nil)
@@ -249,13 +262,23 @@ var _ ccid.Controller = (*Endpoints)(nil)
 // Interface returns the claimed interface.
 func (e *Endpoints) Interface() ccid.Interface { return e.iface }
 
-func (e *Endpoints) check() error {
+// begin counts a transfer under way, or returns ErrClosed. done ends it.
+func (e *Endpoints) begin() error {
 	e.d.mu.Lock()
 	defer e.d.mu.Unlock()
 	if e.closed {
 		return ErrClosed
 	}
+	e.busy.Add(1)
 	return nil
+}
+
+func (e *Endpoints) done() { e.busy.Done() }
+
+// stop marks the Endpoints closed and has their transfers end: under d.mu.
+func (e *Endpoints) stop() {
+	e.closed = true
+	close(e.quit)
 }
 
 // limit returns how long a transfer may take: the device's timeout, or
@@ -278,14 +301,15 @@ func (e *Endpoints) limit(ctx context.Context) (time.Duration, error) {
 
 // Write sends a command message to the bulk-OUT endpoint.
 func (e *Endpoints) Write(ctx context.Context, p []byte) error {
-	if err := e.check(); err != nil {
+	if err := e.begin(); err != nil {
 		return err
 	}
+	defer e.done()
 	t, err := e.limit(ctx)
 	if err != nil {
 		return err
 	}
-	n, err := e.d.transfer(ctx, e.iface.BulkOut, p, t)
+	n, err := e.d.transfer(ctx, e.iface.BulkOut, p, t, e.quit)
 	if err != nil {
 		return err
 	}
@@ -298,22 +322,24 @@ func (e *Endpoints) Write(ctx context.Context, p []byte) error {
 // Read receives one transfer from the bulk-IN endpoint. It returns the
 // context's error as soon as the context is done.
 func (e *Endpoints) Read(ctx context.Context, p []byte) (int, error) {
-	if err := e.check(); err != nil {
+	if err := e.begin(); err != nil {
 		return 0, err
 	}
+	defer e.done()
 	t, err := e.limit(ctx)
 	if err != nil {
 		return 0, err
 	}
-	return e.d.transfer(ctx, e.iface.BulkIn, p, t)
+	return e.d.transfer(ctx, e.iface.BulkIn, p, t, e.quit)
 }
 
 // ClassRequest sends a class-specific request with no data stage to the
 // interface, on the default control pipe: as CCID's ABORT.
 func (e *Endpoints) ClassRequest(ctx context.Context, request byte, value uint16) error {
-	if err := e.check(); err != nil {
+	if err := e.begin(); err != nil {
 		return err
 	}
+	defer e.done()
 	t, err := e.limit(ctx)
 	if err != nil {
 		return err
@@ -331,14 +357,17 @@ func (e *Endpoints) ClassRequest(ctx context.Context, request byte, value uint16
 	return nil
 }
 
-// Close releases the interface. The Device stays open.
+// Close releases the interface. The Device stays open. Transfers under
+// way end, with ErrClosed, before it returns.
 func (e *Endpoints) Close() error {
 	e.d.mu.Lock()
-	defer e.d.mu.Unlock()
 	if e.closed {
+		e.d.mu.Unlock()
 		return nil
 	}
-	e.closed = true
+	e.stop()
 	delete(e.d.claimed, e.iface.Number)
+	e.d.mu.Unlock()
+	e.busy.Wait()
 	return e.d.release(uint32(e.iface.Number))
 }
