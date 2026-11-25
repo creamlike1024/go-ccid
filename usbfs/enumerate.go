@@ -16,14 +16,16 @@ import (
 // Info describes a CCID reader that Enumerate found.
 type Info struct {
 	// Path is the usbfs device file, for Open.
-	Path      string
+	Path string
+	// Bus and Addr are the bus number and the device's address on it.
 	Bus, Addr int
-	VendorID  uint16
-	ProductID uint16
+	// VendorID and ProductID are idVendor and idProduct.
+	VendorID, ProductID uint16
 	// Manufacturer, Product and Serial are the device's strings, as the
 	// kernel read them; empty when it has none.
 	Manufacturer, Product, Serial string
-	Interfaces                    []ccid.Interface
+	// Interfaces are the device's CCID interfaces.
+	Interfaces []ccid.Interface
 }
 
 // Enumerate lists the CCID readers attached, from sysfs, which needs no

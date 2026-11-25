@@ -69,15 +69,19 @@ func (t MessageType) String() string {
 
 // Message is a CCID message: its header and its data (abData).
 type Message struct {
+	// Type is bMessageType.
 	Type MessageType
+	// Slot is bSlot, the slot the message is about.
 	Slot byte
-	Seq  byte
+	// Seq is bSeq, which a response repeats from its command.
+	Seq byte
 	// Param holds the three message-specific bytes of the header: for
 	// commands, as PowerOn's bPowerSelect or XfrBlock's bBWI and
 	// wLevelParameter; for responses, bStatus, bError and the third byte
 	// (bChainParameter, bClockStatus or bProtocolNum).
 	Param [3]byte
-	Data  []byte
+	// Data is abData, of dwLength bytes.
+	Data []byte
 }
 
 // MarshalBinary encodes the message, header and data.
@@ -135,8 +139,9 @@ func (s ICCStatus) String() string {
 // CommandStatus is the outcome of a command (bmCommandStatus).
 type CommandStatus byte
 
+// bmCommandStatus values.
 const (
-	CommandOK            CommandStatus = 0
+	CommandOK            CommandStatus = 0 // the command succeeded
 	CommandFailed        CommandStatus = 1 // bError tells why
 	CommandTimeExtension CommandStatus = 2 // the reader asks for more time
 )

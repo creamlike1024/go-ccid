@@ -48,50 +48,61 @@ func (l ExchangeLevel) String() string {
 	return fmt.Sprintf("ExchangeLevel(%#x)", uint32(l))
 }
 
+// Features is dwFeatures of the class descriptor: what the reader does
+// by itself, and its exchange level (Descriptor.ExchangeLevel).
+type Features uint32
+
 // Features of dwFeatures besides the exchange level.
 const (
-	FeatureAutoParameters  = 0x00000002 // parameters configured from the ATR
-	FeatureAutoActivation  = 0x00000004 // card activated on insertion
-	FeatureAutoVoltage     = 0x00000008 // voltage selected by the reader
-	FeatureAutoClock       = 0x00000010 // clock frequency changed by the reader
-	FeatureAutoBaud        = 0x00000020 // baud rate changed by the reader
-	FeatureAutoPPSProposal = 0x00000040 // PPS negotiated by the reader
-	FeatureAutoPPSCurrent  = 0x00000080 // PPS made by the reader from its parameters
-	FeatureClockStop       = 0x00000100
-	FeatureNAD             = 0x00000200 // T=1 NAD other than 0 accepted
-	FeatureAutoIFSD        = 0x00000400 // T=1 IFSD exchanged by the reader
-	FeatureUSBWakeUp       = 0x00100000
+	FeatureAutoParameters  Features = 0x00000002 // parameters configured from the ATR
+	FeatureAutoActivation           = 0x00000004 // card activated on insertion
+	FeatureAutoVoltage              = 0x00000008 // voltage selected by the reader
+	FeatureAutoClock                = 0x00000010 // clock frequency changed by the reader
+	FeatureAutoBaud                 = 0x00000020 // baud rate changed by the reader
+	FeatureAutoPPSProposal          = 0x00000040 // PPS negotiated by the reader
+	FeatureAutoPPSCurrent           = 0x00000080 // PPS made by the reader from its parameters
+	FeatureClockStop                = 0x00000100 // the reader can stop the card's clock
+	FeatureNAD                      = 0x00000200 // T=1 NAD other than 0 accepted
+	FeatureAutoIFSD                 = 0x00000400 // T=1 IFSD exchanged by the reader
+	FeatureUSBWakeUp                = 0x00100000 // the reader wakes the host on a card's insertion or removal
 )
+
+// Voltage is a card's supply voltage, one bit each as in bVoltageSupport:
+// Descriptor.VoltageSupport holds the reader's, and
+// ConnectOptions.Voltage chooses one.
+type Voltage byte
 
 // Voltages of bVoltageSupport and of PowerOn.
 const (
-	Voltage5V  = 0x01
-	Voltage3V  = 0x02
-	Voltage18V = 0x04
+	Voltage5V  Voltage = 0x01 // 5 V, class A
+	Voltage3V  Voltage = 0x02 // 3 V, class B
+	Voltage18V Voltage = 0x04 // 1.8 V, class C
 )
 
-// Descriptor is the CCID class descriptor of a reader.
+// Descriptor is the CCID class descriptor of a reader (CCID rev 1.1,
+// table 5.1-1). Each field is the one of the specification its comment
+// names.
 type Descriptor struct {
-	CCIDVersion       uint16 // bcdCCID
-	MaxSlotIndex      byte
-	VoltageSupport    byte   // Voltage5V, Voltage3V, Voltage18V
-	Protocols         uint32 // bit 0: T=0, bit 1: T=1
-	DefaultClock      uint32 // kHz
-	MaximumClock      uint32 // kHz
-	NumClockSupported byte
-	DataRate          uint32 // bps
-	MaxDataRate       uint32 // bps
-	NumDataRates      byte
-	MaxIFSD           uint32
-	SynchProtocols    uint32
-	Mechanical        uint32
-	Features          uint32
-	MaxMessageLength  uint32 // dwMaxCCIDMessageLength
-	ClassGetResponse  byte
-	ClassEnvelope     byte
-	LCDLayout         uint16
-	PINSupport        byte
-	MaxCCIDBusySlots  byte
+	CCIDVersion       uint16   // bcdCCID
+	MaxSlotIndex      byte     // bMaxSlotIndex: the slots are 0 to it
+	VoltageSupport    Voltage  // bVoltageSupport: Voltage5V, Voltage3V, Voltage18V
+	Protocols         uint32   // dwProtocols: bit 0 T=0, bit 1 T=1 (SupportsProtocol)
+	DefaultClock      uint32   // dwDefaultClock, kHz
+	MaximumClock      uint32   // dwMaximumClock, kHz
+	NumClockSupported byte     // bNumClockSupported
+	DataRate          uint32   // dwDataRate, bps
+	MaxDataRate       uint32   // dwMaxDataRate, bps
+	NumDataRates      byte     // bNumDataRatesSupported
+	MaxIFSD           uint32   // dwMaxIFSD: the largest T=1 block the reader takes
+	SynchProtocols    uint32   // dwSynchProtocols: synchronous cards' protocols
+	Mechanical        uint32   // dwMechanical: card ejection, locking
+	Features          Features // dwFeatures, with the exchange level (ExchangeLevel)
+	MaxMessageLength  uint32   // dwMaxCCIDMessageLength
+	ClassGetResponse  byte     // bClassGetResponse, for APDU level readers
+	ClassEnvelope     byte     // bClassEnvelope, for APDU level readers
+	LCDLayout         uint16   // wLcdLayout: 0 for no display
+	PINSupport        byte     // bPINSupport: PIN verification and modification
+	MaxCCIDBusySlots  byte     // bMaxCCIDBusySlots: slots that take commands at once
 }
 
 // ParseDescriptor parses a CCID class descriptor: bLength, bDescriptorType
@@ -111,7 +122,7 @@ func ParseDescriptor(b []byte) (Descriptor, error) {
 	return Descriptor{
 		CCIDVersion:       le16(b[2:]),
 		MaxSlotIndex:      b[4],
-		VoltageSupport:    b[5],
+		VoltageSupport:    Voltage(b[5]),
 		Protocols:         le32(b[6:]),
 		DefaultClock:      le32(b[10:]),
 		MaximumClock:      le32(b[14:]),
@@ -122,7 +133,7 @@ func ParseDescriptor(b []byte) (Descriptor, error) {
 		MaxIFSD:           le32(b[28:]),
 		SynchProtocols:    le32(b[32:]),
 		Mechanical:        le32(b[36:]),
-		Features:          le32(b[40:]),
+		Features:          Features(le32(b[40:])),
 		MaxMessageLength:  le32(b[44:]),
 		ClassGetResponse:  b[48],
 		ClassEnvelope:     b[49],
@@ -140,7 +151,7 @@ func (d Descriptor) MarshalBinary() ([]byte, error) {
 	le16 := binary.LittleEndian.PutUint16
 	le32 := binary.LittleEndian.PutUint32
 	le16(b[2:], d.CCIDVersion)
-	b[4], b[5] = d.MaxSlotIndex, d.VoltageSupport
+	b[4], b[5] = d.MaxSlotIndex, byte(d.VoltageSupport)
 	le32(b[6:], d.Protocols)
 	le32(b[10:], d.DefaultClock)
 	le32(b[14:], d.MaximumClock)
@@ -151,7 +162,7 @@ func (d Descriptor) MarshalBinary() ([]byte, error) {
 	le32(b[28:], d.MaxIFSD)
 	le32(b[32:], d.SynchProtocols)
 	le32(b[36:], d.Mechanical)
-	le32(b[40:], d.Features)
+	le32(b[40:], uint32(d.Features))
 	le32(b[44:], d.MaxMessageLength)
 	b[48], b[49] = d.ClassGetResponse, d.ClassEnvelope
 	le16(b[50:], d.LCDLayout)
@@ -171,7 +182,9 @@ func (d Descriptor) SupportsProtocol(p Protocol) bool {
 
 // Interface is a CCID interface found in a configuration descriptor.
 type Interface struct {
-	Number     byte
+	// Number is bInterfaceNumber, which claiming the interface takes.
+	Number byte
+	// AltSetting is bAlternateSetting.
 	AltSetting byte
 	Class      byte // InterfaceClass, or 0xFF for vendor readers with a CCID descriptor
 	// Protocol is bInterfaceProtocol: 0 for CCID's bulk transfers (with
@@ -182,7 +195,8 @@ type Interface struct {
 	BulkIn, BulkOut, InterruptIn byte
 	// Maximum packet sizes of the bulk endpoints.
 	BulkInMaxPacket, BulkOutMaxPacket uint16
-	Descriptor                        Descriptor
+	// Descriptor is the interface's CCID class descriptor.
+	Descriptor Descriptor
 }
 
 // FindInterfaces returns the CCID interfaces of a device's raw
@@ -209,10 +223,10 @@ func FindInterfaces(raw []byte) ([]Interface, error) {
 	finish := func() {
 		switch {
 		case cur == nil:
-		case cur.Class == InterfaceClass && (cur.Protocol == ProtocolICCDA || cur.Protocol == ProtocolICCDB):
+		case cur.Class == InterfaceClass && (cur.Protocol == InterfaceProtocolICCDA || cur.Protocol == InterfaceProtocolICCDB):
 			iccd = true
 		case haveCD && cur.BulkIn != 0 && cur.BulkOut != 0 &&
-			(cur.Class == InterfaceClass && cur.Protocol == ProtocolBulk || cur.Class == 0xFF):
+			(cur.Class == InterfaceClass && cur.Protocol == InterfaceProtocolBulk || cur.Class == 0xFF):
 			found = append(found, *cur)
 		}
 		cur, haveCD = nil, false
@@ -269,11 +283,11 @@ func FindInterfaces(raw []byte) ([]Interface, error) {
 	return nil, ErrNoInterface
 }
 
-// bInterfaceProtocol values of class 0x0B.
+// bInterfaceProtocol values of class 0x0B (Interface.Protocol).
 const (
-	ProtocolBulk  = 0x00 // CCID, and ICCD over bulk transfers
-	ProtocolICCDA = 0x01 // ICCD version A: control transfers
-	ProtocolICCDB = 0x02 // ICCD version B: control transfers, optional interrupt-IN
+	InterfaceProtocolBulk  = 0x00 // CCID, and ICCD over bulk transfers
+	InterfaceProtocolICCDA = 0x01 // ICCD version A: control transfers
+	InterfaceProtocolICCDB = 0x02 // ICCD version B: control transfers, optional interrupt-IN
 )
 
 // ErrNoInterface is returned by FindInterfaces for a device with no CCID

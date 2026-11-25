@@ -10,8 +10,8 @@ import (
 type Protocol byte
 
 const (
-	T0 Protocol = 0
-	T1 Protocol = 1
+	T0 Protocol = 0 // T=0, character oriented
+	T1 Protocol = 1 // T=1, block oriented
 )
 
 func (p Protocol) String() string { return fmt.Sprintf("T=%d", byte(p)) }
@@ -25,15 +25,18 @@ type InterfaceBytes struct {
 
 // ATR is a parsed Answer-To-Reset.
 type ATR struct {
+	// Raw is the ATR as the card sent it.
 	Raw []byte
 	// Inverse reports the inverse convention (TS = 0x3F).
 	Inverse bool
 	// Groups are the interface byte groups, Groups[0] being TA1..TD1.
-	Groups     []InterfaceBytes
+	Groups []InterfaceBytes
+	// Historical are the historical bytes T1..TK.
 	Historical []byte
 	// TCK is the check byte, present when a protocol other than T=0 is
 	// indicated.
-	TCK    byte
+	TCK byte
+	// HasTCK reports whether the ATR has TCK.
 	HasTCK bool
 }
 

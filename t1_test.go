@@ -44,9 +44,9 @@ func echoAPDU(data []byte) (apdu, want []byte) {
 
 func TestT1Connect(t *testing.T) {
 	_, sim := openT1(t, &testCard{atr: atrT1(0x20)}, ccidtest.Options{})
-	p, params := sim.Parameters()
+	p, params, ok := sim.Parameters()
 	// Fd/Dd, LRC, no extra guard time, BWI 4 CWI 5, IFSC 32, NAD 0.
-	if p != 1 || !bytes.Equal(params, []byte{0x11, 0x10, 0x00, 0x45, 0x00, 0x20, 0x00}) {
+	if !ok || p != ccid.T1 || !bytes.Equal(params, []byte{0x11, 0x10, 0x00, 0x45, 0x00, 0x20, 0x00}) {
 		t.Errorf("SetParameters T=%d % x", p, params)
 	}
 	if got := sim.T1().IFSD; got != 254 {

@@ -35,7 +35,7 @@ func FuzzParseATR(f *testing.F) {
 }
 
 func FuzzFindInterfaces(f *testing.F) {
-	d := Descriptor{Features: uint32(LevelTPDU), MaxMessageLength: 271, Protocols: 3}
+	d := Descriptor{Features: Features(LevelTPDU), MaxMessageLength: 271, Protocols: 3}
 	cd, _ := d.MarshalBinary()
 	seed := []byte{18, 0x01, 0x00, 0x02, 0, 0, 0, 64, 0x2F, 0x07, 0xCC, 0x90, 0x00, 0x01, 1, 2, 0, 1,
 		9, 0x02, 0, 0, 1, 1, 0, 0x80, 50, 9, 0x04, 0, 0, 3, 0x0B, 0, 0, 0}

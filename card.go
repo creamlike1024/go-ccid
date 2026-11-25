@@ -17,7 +17,7 @@ type ConnectOptions struct {
 	// 0, the reader chooses if it selects voltages itself, or else the
 	// voltages it supports are tried from the lowest, as ISO/IEC 7816-3
 	// advises.
-	Voltage byte
+	Voltage Voltage
 	// AutoGetResponse, at TPDU level with T=0, has Transmit fetch the
 	// response of 61xx with GET RESPONSE and resend a command of case 2
 	// with the Le of 6Cxx, returning the whole response, as the transport
@@ -101,26 +101,26 @@ func (r *Reader) Connect(ctx context.Context, slot byte, o *ConnectOptions) (*Ca
 }
 
 // powerSelect maps the voltages of bVoltageSupport to bPowerSelect.
-var powerSelect = map[byte]byte{0: 0, Voltage5V: 1, Voltage3V: 2, Voltage18V: 3}
+var powerSelect = map[Voltage]byte{0: 0, Voltage5V: 1, Voltage3V: 2, Voltage18V: 3}
 
-func (r *Reader) powerOn(ctx context.Context, slot, voltage byte) ([]byte, error) {
-	var tries []byte
+func (r *Reader) powerOn(ctx context.Context, slot byte, voltage Voltage) ([]byte, error) {
+	var tries []Voltage
 	switch {
 	case voltage != 0:
 		if _, ok := powerSelect[voltage]; !ok {
 			return nil, fmt.Errorf("ccid: voltage %#02x is not one of Voltage5V, Voltage3V, Voltage18V", voltage)
 		}
-		tries = []byte{voltage}
+		tries = []Voltage{voltage}
 	case r.desc.Features&FeatureAutoVoltage != 0:
-		tries = []byte{0}
+		tries = []Voltage{0}
 	default:
-		for _, v := range []byte{Voltage18V, Voltage3V, Voltage5V} {
+		for _, v := range []Voltage{Voltage18V, Voltage3V, Voltage5V} {
 			if r.desc.VoltageSupport&v != 0 {
 				tries = append(tries, v)
 			}
 		}
 		if len(tries) == 0 {
-			tries = []byte{0}
+			tries = []Voltage{0}
 		}
 	}
 	var last error
@@ -282,7 +282,7 @@ func (c *Card) Transmit(ctx context.Context, apdu []byte) ([]byte, error) {
 	c.r.mu.Lock()
 	defer c.r.mu.Unlock()
 	if c.closed {
-		return nil, ErrDisconnected
+		return nil, ErrCardClosed
 	}
 	switch c.level {
 	case LevelShortAPDU:

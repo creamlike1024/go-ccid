@@ -59,7 +59,7 @@ func dataOf(apdu []byte) []byte {
 
 func open(t *testing.T, card ccidtest.Card, o ccidtest.Options) (*ccid.Reader, *ccidtest.Reader) {
 	t.Helper()
-	sim := ccidtest.NewReader(card, o)
+	sim := ccidtest.NewReader(card, &o)
 	r, err := ccid.Open(sim, sim.Descriptor(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -92,15 +92,15 @@ func TestConnectSetsT0Parameters(t *testing.T) {
 	if c.Protocol() != ccid.T0 {
 		t.Errorf("protocol %v", c.Protocol())
 	}
-	p, params := sim.Parameters()
+	p, params, ok := sim.Parameters()
 	// Fd/Dd, direct convention, no extra guard time, WI 10, no clock stop.
-	if p != 0 || !bytes.Equal(params, []byte{0x11, 0x00, 0x00, 10, 0x00}) {
+	if !ok || p != ccid.T0 || !bytes.Equal(params, []byte{0x11, 0x00, 0x00, 10, 0x00}) {
 		t.Errorf("SetParameters T=%d % x", p, params)
 	}
 }
 
 func TestConnectRate(t *testing.T) {
-	fidi := func(sim *ccidtest.Reader) byte { _, p := sim.Parameters(); return p[0] }
+	fidi := func(sim *ccidtest.Reader) byte { _, p, _ := sim.Parameters(); return p[0] }
 	// A TPDU level reader without PPS of its own: the host's PPS proposes
 	// the card's TA1, Fi 512 Di 32, 250 kbit/s at 4 MHz.
 	r, sim := open(t, &testCard{atr: ccidtest.ATRT0T1}, ccidtest.Options{})
@@ -161,7 +161,7 @@ func TestConnectPPSFailure(t *testing.T) {
 			if sim.PowerOns() != 2 {
 				t.Errorf("%d power ons, want 2", sim.PowerOns())
 			}
-			if _, p := sim.Parameters(); p[0] != 0x11 {
+			if _, p, _ := sim.Parameters(); p[0] != 0x11 {
 				t.Errorf("bmFindexDindex %#x, want 0x11", p[0])
 			}
 			if resp := transmit(t, c, 0x00, 0xCA, 0x00, 0x00, 0x04); !bytes.Equal(resp, append(pattern(4), sw9000...)) {
@@ -202,9 +202,9 @@ func TestConnectNoCard(t *testing.T) {
 }
 
 func TestConnectCharacterLevelUnsupported(t *testing.T) {
-	sim := ccidtest.NewReader(&testCard{atr: ccidtest.ATRT0}, ccidtest.Options{})
+	sim := ccidtest.NewReader(&testCard{atr: ccidtest.ATRT0}, &ccidtest.Options{})
 	d := sim.Descriptor()
-	d.Features &^= uint32(ccid.LevelTPDU)
+	d.Features &^= ccid.Features(ccid.LevelTPDU)
 	r, _ := ccid.Open(sim, d, nil)
 	if _, err := r.Connect(context.Background(), 0, nil); !errors.Is(err, ccid.ErrNotSupported) {
 		t.Fatalf("character level: %v", err)
@@ -383,7 +383,7 @@ func TestDisconnect(t *testing.T) {
 	if err := c.Disconnect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Transmit(context.Background(), []byte{0x00, 0x70, 0x00, 0x00}); !errors.Is(err, ccid.ErrDisconnected) {
+	if _, err := c.Transmit(context.Background(), []byte{0x00, 0x70, 0x00, 0x00}); !errors.Is(err, ccid.ErrCardClosed) {
 		t.Errorf("Transmit after Disconnect: %v", err)
 	}
 	if s, err := r.SlotStatus(context.Background(), 0); err != nil || s != ccid.ICCInactive {
@@ -405,7 +405,7 @@ func TestCardRemoved(t *testing.T) {
 }
 
 func TestEscapeAndTrace(t *testing.T) {
-	sim := ccidtest.NewReader(nil, ccidtest.Options{})
+	sim := ccidtest.NewReader(nil, &ccidtest.Options{})
 	var traced []ccid.Direction
 	r, _ := ccid.Open(sim, sim.Descriptor(), &ccid.Options{Trace: func(d ccid.Direction, msg []byte) {
 		traced = append(traced, d)

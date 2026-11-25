@@ -127,8 +127,10 @@ func readDescriptors(fd int) ([]byte, error) {
 // Descriptors returns the device's raw descriptors.
 func (d *Device) Descriptors() []byte { return d.raw }
 
-// VendorID and ProductID return idVendor and idProduct.
-func (d *Device) VendorID() uint16  { return uint16(d.raw[8]) | uint16(d.raw[9])<<8 }
+// VendorID returns idVendor.
+func (d *Device) VendorID() uint16 { return uint16(d.raw[8]) | uint16(d.raw[9])<<8 }
+
+// ProductID returns idProduct.
 func (d *Device) ProductID() uint16 { return uint16(d.raw[10]) | uint16(d.raw[11])<<8 }
 
 // Interfaces returns the device's CCID interfaces, none for a device

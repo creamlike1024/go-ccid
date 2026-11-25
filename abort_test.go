@@ -63,7 +63,7 @@ func TestAbortDropsLateResponse(t *testing.T) {
 
 // Reader.Abort needs control transfers.
 func TestAbortNeedsController(t *testing.T) {
-	sim := ccidtest.NewReader(&testCard{atr: ccidtest.ATRT0, n: 2}, ccidtest.Options{})
+	sim := ccidtest.NewReader(&testCard{atr: ccidtest.ATRT0, n: 2}, &ccidtest.Options{})
 	r, err := ccid.Open(bulkOnly{sim}, sim.Descriptor(), nil)
 	if err != nil {
 		t.Fatal(err)

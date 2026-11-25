@@ -24,8 +24,9 @@ var (
 	ErrProtocol = errors.New("ccid: protocol error")
 	// ErrInvalidAPDU: the command APDU is malformed.
 	ErrInvalidAPDU = errors.New("ccid: invalid command APDU")
-	// ErrDisconnected: the card was disconnected.
-	ErrDisconnected = errors.New("ccid: card disconnected")
+	// ErrCardClosed: the Card was disconnected with Card.Disconnect, and
+	// is no longer of use.
+	ErrCardClosed = errors.New("ccid: card closed")
 )
 
 // bError values of failed commands (CCID rev 1.1, table 6.2-2).
@@ -69,8 +70,10 @@ var errorNames = map[byte]string{
 
 // CommandError is a command the reader reports as failed.
 type CommandError struct {
+	// Command is the command that failed.
 	Command MessageType
-	ICC     ICCStatus
+	// ICC is the state of the card that the reader reported with it.
+	ICC ICCStatus
 	// Code is bError: one of the codes of the CCID specification, or, for
 	// a command with a wrong parameter, the offset of that parameter in
 	// the command.

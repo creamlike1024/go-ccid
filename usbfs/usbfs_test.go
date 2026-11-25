@@ -72,7 +72,7 @@ func TestURBLayout(t *testing.T) {
 // interface, as a usbfs file or sysfs gives them.
 func readerDescriptors(t *testing.T) []byte {
 	t.Helper()
-	cd, _ := ccidtest.NewReader(nil, ccidtest.Options{}).Descriptor().MarshalBinary()
+	cd, _ := ccidtest.NewReader(nil, &ccidtest.Options{}).Descriptor().MarshalBinary()
 	raw := []byte{18, 0x01, 0x00, 0x02, 0, 0, 0, 64, 0x2F, 0x07, 0xCC, 0x90, 0x00, 0x01, 1, 2, 0, 1}
 	raw = append(raw, 9, 0x02, byte(9+9+54+21), 0, 1, 1, 0, 0x80, 50)
 	raw = append(raw, 9, 0x04, 0, 0, 3, ccid.InterfaceClass, 0, 0, 0)

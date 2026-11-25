@@ -27,11 +27,16 @@ type Card interface {
 
 // FuncCard is a Card of an ATR and a function.
 type FuncCard struct {
-	Answer []byte
-	Func   func(apdu []byte) []byte
+	// ATRBytes is the card's ATR.
+	ATRBytes []byte
+	// Func answers each command APDU, as Card.Transmit does.
+	Func func(apdu []byte) []byte
 }
 
-func (c FuncCard) ATR() []byte                 { return c.Answer }
+// ATR returns c.ATRBytes.
+func (c FuncCard) ATR() []byte { return c.ATRBytes }
+
+// Transmit returns c.Func(apdu).
 func (c FuncCard) Transmit(apdu []byte) []byte { return c.Func(apdu) }
 
 // ATRT0 is the ATR of a T=0 card at the default rate.
@@ -49,13 +54,13 @@ type Options struct {
 	// MaxMessageLength is dwMaxCCIDMessageLength; 271 when 0.
 	MaxMessageLength int
 	// Features are dwFeatures besides the exchange level.
-	Features uint32
+	Features ccid.Features
 	// Protocols is dwProtocols; T=0 and T=1 when 0.
 	Protocols uint32
 	// Voltages is bVoltageSupport; all three when 0.
-	Voltages byte
+	Voltages ccid.Voltage
 	// CardVoltages are the voltages the card answers at; all when 0.
-	CardVoltages byte
+	CardVoltages ccid.Voltage
 	// TimeExtensions is how many time extensions precede the answer to
 	// each XfrBlock.
 	TimeExtensions int
@@ -236,7 +241,12 @@ func (r *Reader) T1() T1Stats {
 }
 
 // NewReader returns a simulated reader holding card, which may be nil.
-func NewReader(card Card, o Options) *Reader {
+// Options may be nil, for the defaults.
+func NewReader(card Card, opts *Options) *Reader {
+	var o Options
+	if opts != nil {
+		o = *opts
+	}
 	if o.Level == 0 {
 		o.Level = ccid.LevelTPDU
 	}
@@ -266,7 +276,7 @@ func (r *Reader) Descriptor() ccid.Descriptor {
 		DataRate:         10752,
 		MaxDataRate:      r.o.MaxDataRate,
 		MaxIFSD:          254,
-		Features:         uint32(r.o.Level) | r.o.Features,
+		Features:         ccid.Features(r.o.Level) | r.o.Features,
 		MaxMessageLength: uint32(r.o.MaxMessageLength),
 		ClassGetResponse: 0xFF,
 		ClassEnvelope:    0xFF,
@@ -300,11 +310,14 @@ func (r *Reader) Commands() []ccid.Message {
 }
 
 // Parameters returns the protocol and the abProtocolDataStructure of the
-// last SetParameters, -1 and nil before one.
-func (r *Reader) Parameters() (int, []byte) {
+// last SetParameters; ok is false before one.
+func (r *Reader) Parameters() (p ccid.Protocol, params []byte, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.protocol, slices.Clone(r.params)
+	if r.protocol < 0 {
+		return 0, nil, false
+	}
+	return ccid.Protocol(r.protocol), slices.Clone(r.params), true
 }
 
 // Write takes a command message and queues its response.
@@ -436,7 +449,7 @@ const (
 	errCmdNotSupport = 0x00
 )
 
-var voltageOf = map[byte]byte{1: ccid.Voltage5V, 2: ccid.Voltage3V, 3: ccid.Voltage18V}
+var voltageOf = map[byte]ccid.Voltage{1: ccid.Voltage5V, 2: ccid.Voltage3V, 3: ccid.Voltage18V}
 
 func (r *Reader) handle(m ccid.Message) []ccid.Message {
 	switch m.Type {
