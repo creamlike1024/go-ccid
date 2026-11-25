@@ -55,16 +55,16 @@ type Features uint32
 // Features of dwFeatures besides the exchange level.
 const (
 	FeatureAutoParameters  Features = 0x00000002 // parameters configured from the ATR
-	FeatureAutoActivation           = 0x00000004 // card activated on insertion
-	FeatureAutoVoltage              = 0x00000008 // voltage selected by the reader
-	FeatureAutoClock                = 0x00000010 // clock frequency changed by the reader
-	FeatureAutoBaud                 = 0x00000020 // baud rate changed by the reader
-	FeatureAutoPPSProposal          = 0x00000040 // PPS negotiated by the reader
-	FeatureAutoPPSCurrent           = 0x00000080 // PPS made by the reader from its parameters
-	FeatureClockStop                = 0x00000100 // the reader can stop the card's clock
-	FeatureNAD                      = 0x00000200 // T=1 NAD other than 0 accepted
-	FeatureAutoIFSD                 = 0x00000400 // T=1 IFSD exchanged by the reader
-	FeatureUSBWakeUp                = 0x00100000 // the reader wakes the host on a card's insertion or removal
+	FeatureAutoActivation  Features = 0x00000004 // card activated on insertion
+	FeatureAutoVoltage     Features = 0x00000008 // voltage selected by the reader
+	FeatureAutoClock       Features = 0x00000010 // clock frequency changed by the reader
+	FeatureAutoBaud        Features = 0x00000020 // baud rate changed by the reader
+	FeatureAutoPPSProposal Features = 0x00000040 // PPS negotiated by the reader
+	FeatureAutoPPSCurrent  Features = 0x00000080 // PPS made by the reader from its parameters
+	FeatureClockStop       Features = 0x00000100 // the reader can stop the card's clock
+	FeatureNAD             Features = 0x00000200 // T=1 NAD other than 0 accepted
+	FeatureAutoIFSD        Features = 0x00000400 // T=1 IFSD exchanged by the reader
+	FeatureUSBWakeUp       Features = 0x00100000 // the reader wakes the host on a card's insertion or removal
 )
 
 // Voltage is a card's supply voltage, one bit each as in bVoltageSupport:
