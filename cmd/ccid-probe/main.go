@@ -50,14 +50,16 @@ func run(path string, trace, t1, noPPS, getResponse bool, slot byte, timeout tim
 		}
 		cmds = append(cmds, b)
 	}
-	readers, err := usbfs.Enumerate()
-	if err != nil {
-		return err
-	}
-	for _, r := range readers {
-		fmt.Printf("%s  %04x:%04x  %s %s\n", r.Path, r.VendorID, r.ProductID, r.Manufacturer, r.Product)
-	}
+	// A reader given is opened as it is: where sysfs can't be read, as for
+	// Android's shell, Enumerate finds nothing.
 	if path == "" {
+		readers, err := usbfs.Enumerate()
+		if err != nil {
+			return err
+		}
+		for _, r := range readers {
+			fmt.Printf("%s  %04x:%04x  %s %s\n", r.Path, r.VendorID, r.ProductID, r.Manufacturer, r.Product)
+		}
 		if len(readers) == 0 {
 			return errors.New("no CCID reader found")
 		}
