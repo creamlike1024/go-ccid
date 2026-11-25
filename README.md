@@ -7,10 +7,11 @@ without pcscd, PC/SC or cgo.
 It is meant for systems where PC/SC is not available, such as Android, where
 an app gets the reader's file descriptor from `UsbManager` and hands it over.
 
-**Status: early.** On real hardware it has read cards on Android with one
-reader so far (an ACS ACR38U, TPDU level, T=0); longer exchanges, T=1 and
-other readers are tested against the simulated reader only. The API may
-change.
+**Status: early (v0.x).** The API may still change before v1.
+
+```sh
+go get github.com/creamlike1024/go-ccid
+```
 
 ## Scope
 
@@ -56,15 +57,18 @@ or use PC/SC for that reader.
 
 ```go
 readers, err := usbfs.Enumerate() // Linux; on Android, usbfs.FromFD(fd, nil)
-if err != nil || len(readers) == 0 {
+if err != nil {
 	return err
+}
+if len(readers) == 0 {
+	return errors.New("no CCID reader")
 }
 dev, err := usbfs.Open(readers[0].Path, nil)
 if err != nil {
 	return err
 }
 defer dev.Close()
-iface := dev.Interfaces()[0]
+iface := readers[0].Interfaces[0] // Enumerate lists devices with one at least
 transport, err := dev.Claim(iface)
 if err != nil {
 	return err
@@ -88,7 +92,8 @@ device's raw descriptors.
 ## ccid-probe
 
 `cmd/ccid-probe` (Linux) lists the readers, connects to the card and sends
-APDUs given in hex, with `-trace` printing every CCID message:
+APDUs given in hex, with `-trace` printing every CCID message. `-reader`
+opens a device file as it is, without listing (where sysfs can't be read):
 
 ```sh
 go run github.com/creamlike1024/go-ccid/cmd/ccid-probe -trace 00A4040000
